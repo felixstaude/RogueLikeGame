@@ -1,4 +1,3 @@
-// src/main/java/de/felixstaude/roguelike/shop/Shop.java
 package de.felixstaude.roguelike.shop;
 
 import de.felixstaude.roguelike.entity.Player;
@@ -9,31 +8,29 @@ import de.felixstaude.roguelike.items.Mod;
 import de.felixstaude.roguelike.items.PassiveItemCatalog;
 import de.felixstaude.roguelike.stats.Stat;
 import de.felixstaude.roguelike.stats.Stats;
+import de.felixstaude.roguelike.util.Colors;
+import de.felixstaude.roguelike.util.Draw;
+import de.felixstaude.roguelike.util.Fonts;
+import de.felixstaude.roguelike.util.Layout;
 import de.felixstaude.roguelike.weapons.*;
 
-import java.awt.*;
+import java.awt.Color;
+import java.awt.Graphics2D;
+import java.awt.Rectangle;
 import java.awt.event.KeyEvent;
-import java.awt.geom.RoundRectangle2D;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
-import java.util.*;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
- * Schöner Shop:
- * - Grid-Karten mit Rarity-Badge, Mod-List, BUY-Button, Hover/Click
- * - Reroll-Button (Start 6G, +4 je Reroll in Phase, Reset pro Phase)
- * - Next Wave Button
- * - Fixed Prices + Discounts (Bargain Hunter), Unique nur 1x pro Run
- * - Duplicates in derselben Rotation erlaubt
- *
- * Kompatible Engine-API:
- *  - prepareForWave(int wave, Player p)
- *  - handleInput(Input input, Player p) -> boolean (true = nächste Wave starten)
- *  - render(Graphics2D g, Player p, int wave)
+ * Shop UI with single-row layout, rarity badges, top buttons and hotbar SELL support.
  */
 public class Shop {
 
-    // ------------------- Offer & Purchase ------------------------------------
     public enum OfferType { PASSIVE, WEAPON }
 
     public static final class Offer {
@@ -42,24 +39,32 @@ public class Shop {
         public final ItemRarity rarity;
         public final int price;
         public final List<Mod> mods;
-        public final Item item;            // PASSIVE
-        public final WeaponDef weaponDef;  // WEAPON
-        public final WeaponTier tier;      // WEAPON
+        public final Item item;
+        public final WeaponDef weaponDef;
+        public final WeaponTier tier;
 
         private Offer(OfferType type, String title, ItemRarity rarity, int price, List<Mod> mods,
                       Item item, WeaponDef weaponDef, WeaponTier tier) {
-            this.type = type; this.title = title; this.rarity = rarity; this.price = price; this.mods = mods;
-            this.item = item; this.weaponDef = weaponDef; this.tier = tier;
+            this.type = type;
+            this.title = title;
+            this.rarity = rarity;
+            this.price = price;
+            this.mods = mods;
+            this.item = item;
+            this.weaponDef = weaponDef;
+            this.tier = tier;
         }
 
-        public static Offer passive(Item it) {
-            return new Offer(OfferType.PASSIVE, it.name, it.rarity, it.price, it.mods, it, null, null);
+        public static Offer passive(Item item) {
+            return new Offer(OfferType.PASSIVE, item.name, item.rarity, item.price, item.mods, item, null, null);
         }
+
         public static Offer weapon(WeaponDef def, WeaponTier tier) {
-            String t = def.name + " ["+tier.name()+"]";
-            return new Offer(OfferType.WEAPON, t, rarityFromTier(def, tier), def.price(tier), def.mods(tier), null, def, tier);
+            String title = def.name + " [" + tier.name() + "]";
+            return new Offer(OfferType.WEAPON, title, rarityFromTier(def, tier), def.price(tier), def.mods(tier), null, def, tier);
         }
-        private static ItemRarity rarityFromTier(WeaponDef def, WeaponTier tier){
+
+        private static ItemRarity rarityFromTier(WeaponDef def, WeaponTier tier) {
             return switch (tier) {
                 case COMMON -> def.rarityHint;
                 case UNCOMMON -> bump(def.rarityHint);
@@ -67,8 +72,9 @@ public class Shop {
                 case EPIC -> ItemRarity.EPIC;
             };
         }
-        private static ItemRarity bump(ItemRarity r){
-            return switch (r) {
+
+        private static ItemRarity bump(ItemRarity rarity) {
+            return switch (rarity) {
                 case COMMON -> ItemRarity.UNCOMMON;
                 case UNCOMMON -> ItemRarity.RARE;
                 case RARE, EPIC -> ItemRarity.EPIC;
@@ -80,165 +86,169 @@ public class Shop {
         public final boolean success;
         public final int goldSpent;
         public final String message;
+
         public PurchaseResult(boolean success, int goldSpent, String message) {
-            this.success = success; this.goldSpent = goldSpent; this.message = message;
+            this.success = success;
+            this.goldSpent = goldSpent;
+            this.message = message;
         }
     }
 
-    // ------------------- Persistenter Run-Zustand -----------------------------
     private final List<Item> passivePool = PassiveItemCatalog.all();
-    private final Map<WeaponType, WeaponDef> weapons = WeaponCatalog.all();
+    private final Map<WeaponType, WeaponDef> weapons = new HashMap<>(WeaponCatalog.all());
     private final Set<String> boughtUniques = new HashSet<>();
 
-    // Shop-Flags (aus Items)
-    private int shopRerollDiscount = 0;   // Lucky Charm: -2 (min 2)
-    private int shopPriceDiscountPct = 0; // Bargain Hunter: -15% (stack bis -50%)
+    private int shopRerollDiscount = 0;
+    private int shopPriceDiscountPct = 0;
 
-    // Rotation
     private final List<Offer> offers = new ArrayList<>();
     private int rerollCost = 6;
     private int rerollsThisPhase = 0;
 
-    // Interne Stats (passive + Waffen)
     private final Stats passiveStats = new Stats();
     private final WeaponHotbar hotbar = new WeaponHotbar();
 
-    // UI-State
     private String lastMessage = "";
     private final List<CardUI> cardUIs = new ArrayList<>();
+    private final List<HotbarSlotUI> hotbarUIs = new ArrayList<>();
+
+    private Rectangle panelRect = new Rectangle();
     private Rectangle rerollBtn = new Rectangle();
     private Rectangle nextBtn = new Rectangle();
+    private Rectangle hotbarRect = new Rectangle();
+    private Rectangle messageRect = new Rectangle();
 
-    // Layout-Konstanten
-    private static final int SCREEN_W = 1280, SCREEN_H = 720;
-    private static final int PANEL_W = 1100, PANEL_H = 560;
-    private static final int CARD_W = 330, CARD_H = 150;
-    private static final int GRID_COLS = 3;
-    private static final int GRID_GAP_X = 36, GRID_GAP_Y = 26;
+    private int canvasW = 1280;
+    private int canvasH = 720;
+    private int pointerX = 0;
+    private int pointerY = 0;
+    private boolean layoutDirty = true;
 
-    // ------------------- Engine-kompatible API --------------------------------
+    public void setCanvasSize(int width, int height) {
+        if (width != this.canvasW || height != this.canvasH) {
+            this.canvasW = width;
+            this.canvasH = height;
+            markLayoutDirty();
+        }
+    }
 
-    public void prepareForWave(int wave, Player p) {
+    public void updatePointer(int x, int y) {
+        this.pointerX = x;
+        this.pointerY = y;
+    }
+
+    public void prepareForWave(int wave, Player player) {
         rollOffers(0, 0);
     }
 
-    public boolean handleInput(Input input, Player p) {
-        computeLayout(); // damit Klickflächen existieren
+    public boolean handleInput(Input input, Player player) {
+        ensureLayout();
 
-        // Maus: BUY-Buttons
         if (input.mousePressedL) {
+            if (trySellWeapon(input, player)) {
+                return false;
+            }
+
             for (int i = 0; i < cardUIs.size(); i++) {
-                CardUI c = cardUIs.get(i);
-                if (c.buyBtn.contains(input.mouseX, input.mouseY)) {
-                    // Kauf
-                    PurchaseResult res = buy(i, passiveStats, hotbar, p.gold);
-                    if (res.success) {
-                        p.gold -= res.goldSpent;
-                        // Karte einmalig kaufbar in dieser Rotation -> entferne Offer+UI
+                CardUI card = cardUIs.get(i);
+                if (card.buyBtn.contains(input.mouseX, input.mouseY)) {
+                    PurchaseResult result = buy(i, passiveStats, hotbar, player.gold);
+                    if (result.success) {
+                        player.gold -= result.goldSpent;
                         offers.remove(i);
-                        cardUIs.remove(i);
-                        relayoutAfterRemoval();
+                        lastMessage = result.message + " (−" + result.goldSpent + "G)";
+                        markLayoutDirty();
+                    } else {
+                        lastMessage = result.message;
                     }
-                    lastMessage = res.message + (res.success ? " (−" + res.goldSpent + "G)" : "");
                     return false;
                 }
             }
-            // Reroll-Button
+
             if (rerollBtn.contains(input.mouseX, input.mouseY)) {
                 int cost = getRerollCost();
-                if (p.gold >= cost) {
-                    p.gold -= cost;
+                if (player.gold >= cost) {
+                    player.gold -= cost;
                     reroll(0, 0);
                     lastMessage = "Shop rerolled (−" + cost + "G)";
                 } else {
-                    lastMessage = "Nicht genug Gold für Reroll ("+cost+"G)";
+                    lastMessage = "Nicht genug Gold für Reroll (" + cost + "G)";
                 }
                 return false;
             }
-            // Next-Wave
-            if (nextBtn.contains(input.mouseX, input.mouseY)) return true;
+
+            if (nextBtn.contains(input.mouseX, input.mouseY)) {
+                return true;
+            }
         }
 
-        // Tastatur-Shortcuts
-        int n = offers.size();
-        for (int i = 0; i < n; i++) {
+        for (int i = 0; i < offers.size(); i++) {
             if (input.wasPressed(KeyEvent.VK_1 + i)) {
-                PurchaseResult res = buy(i, passiveStats, hotbar, p.gold);
-                if (res.success) {
-                    p.gold -= res.goldSpent;
+                PurchaseResult result = buy(i, passiveStats, hotbar, player.gold);
+                if (result.success) {
+                    player.gold -= result.goldSpent;
                     offers.remove(i);
-                    if (i < cardUIs.size()) cardUIs.remove(i);
-                    relayoutAfterRemoval();
+                    lastMessage = result.message + " (−" + result.goldSpent + "G)";
+                    markLayoutDirty();
+                } else {
+                    lastMessage = result.message;
                 }
-                lastMessage = res.message + (res.success ? " (−" + res.goldSpent + "G)" : "");
                 return false;
             }
         }
+
         if (input.wasPressed(KeyEvent.VK_R)) {
             int cost = getRerollCost();
-            if (p.gold >= cost) {
-                p.gold -= cost;
+            if (player.gold >= cost) {
+                player.gold -= cost;
                 reroll(0, 0);
                 lastMessage = "Shop rerolled (−" + cost + "G)";
-            } else lastMessage = "Nicht genug Gold für Reroll ("+cost+"G)";
+            } else {
+                lastMessage = "Nicht genug Gold für Reroll (" + cost + "G)";
+            }
         }
-        if (input.wasPressed(KeyEvent.VK_SPACE)) return true;
+
+        if (input.wasPressed(KeyEvent.VK_SPACE)) {
+            return true;
+        }
 
         return false;
     }
 
-    public void render(Graphics2D g, Player p, int wave) {
-        // AA & UI-Qualität
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+    public void render(Graphics2D g, Player player, int wave) {
+        ensureLayout();
 
-        // Dim-Overlay
         g.setColor(new Color(0, 0, 0, 160));
-        g.fillRect(0, 0, SCREEN_W, SCREEN_H);
+        g.fillRect(0, 0, canvasW, canvasH);
 
-        // Panel
-        int panelX = (SCREEN_W - PANEL_W) / 2;
-        int panelY = (SCREEN_H - PANEL_H) / 2;
-        drawPanel(g, panelX, panelY, PANEL_W, PANEL_H);
+        Draw.drawShadowedPanel(g, panelRect, 22, Colors.PANEL_SHADOW, 6, 8, Colors.PANEL_BG, Colors.PANEL_BORDER);
 
-        // Header
-        int y = panelY + 40;
-        g.setColor(new Color(230, 236, 255));
-        g.setFont(new Font("Inter", Font.BOLD, 28));
-        drawCentered(g, "SHOP – Wave " + wave + " beendet", SCREEN_W, y);
+        g.setFont(Fonts.bold(22));
+        g.setColor(Colors.TEXT_PRIMARY);
+        Rectangle titleRect = new Rectangle(panelRect.x, panelRect.y + 26, panelRect.width, 36);
+        Draw.drawCenteredString(g, "SHOP – Wave " + wave + " beendet", titleRect);
 
-        y += 28;
-        g.setFont(new Font("Inter", Font.PLAIN, 16));
-        String hint = "Gold: " + p.gold + "   •   Reroll: " + getRerollCost() + "G   •   Klick auf BUY oder drücke 1.."
-                + Math.max(offers.size(),1) + "  •  SPACE: Nächste Wave";
-        g.setColor(new Color(190, 205, 230));
-        drawCentered(g, hint, SCREEN_W, y);
+        g.setFont(Fonts.regular(15));
+        g.setColor(Colors.TEXT_SECONDARY);
+        String hint = "Gold: " + player.gold + "   •   Reroll: " + getRerollCost() + "G   •   Klick BUY oder 1.." + Math.max(1, offers.size()) + "   •   SPACE: Start";
+        Rectangle hintRect = new Rectangle(panelRect.x, titleRect.y + titleRect.height + 4, panelRect.width, 24);
+        Draw.drawCenteredString(g, hint, hintRect);
 
-        // Grid der Cards
-        computeLayout(); // erzeugt cardUIs, rerollBtn, nextBtn
+        drawButtons(g, player);
 
-        // Karten
+        g.setFont(Fonts.regular(14));
         for (int i = 0; i < cardUIs.size(); i++) {
-            drawCard(g, cardUIs.get(i), offers.get(i), p);
+            drawCard(g, cardUIs.get(i), offers.get(i), player);
         }
 
-        // Footer-Buttons
-        drawPrimaryButton(g, rerollBtn, "Reroll (" + getRerollCost() + "G)",
-                p.gold >= getRerollCost(), isHover(rerollBtn, g));
+        drawHotbar(g);
 
-        drawSuccessButton(g, nextBtn, "Start Next Wave", true, isHover(nextBtn, g));
-
-        // Hotbar-Preview (unten)
-        drawHotbar(g, panelX + 24, panelY + PANEL_H - 84);
-
-        // Status-Msg
         if (!lastMessage.isEmpty()) {
-            g.setFont(new Font("Inter", Font.PLAIN, 16));
-            g.setColor(new Color(255, 230, 180));
-            drawCentered(g, lastMessage, SCREEN_W, panelY + PANEL_H - 20);
+            g.setFont(Fonts.regular(15));
+            g.setColor(Colors.WARNING);
+            Draw.drawCenteredString(g, lastMessage, messageRect);
         }
     }
-
-    // ------------------- Neue Logik (Rotation/Reroll/Buy) --------------------
 
     public void resetRun() {
         boughtUniques.clear();
@@ -250,11 +260,11 @@ public class Shop {
         lastMessage = "";
         passiveStats.clear();
         hotbar.getSlots().clear();
-        cardUIs.clear();
+        markLayoutDirty();
     }
 
-    public List<Offer> getOffers(){ return offers; }
-    public int getRerollCost(){ return rerollCost; }
+    public List<Offer> getOffers() { return offers; }
+    public int getRerollCost() { return rerollCost; }
 
     public void rollOffers(int luck, int harvesting) {
         offers.clear();
@@ -275,7 +285,7 @@ public class Shop {
                 offers.add(Offer.passive(it));
             }
         }
-        cardUIs.clear();
+        markLayoutDirty();
     }
 
     public void reroll(int luck, int harvesting) {
@@ -286,34 +296,202 @@ public class Shop {
 
     public PurchaseResult buy(int index, Stats passiveStats, WeaponHotbar hotbar, int goldAvailable) {
         if (index < 0 || index >= offers.size()) return new PurchaseResult(false, 0, "Ungültiger Index.");
-        Offer o = offers.get(index);
+        Offer offer = offers.get(index);
 
-        int price = applyDiscounts(o.price);
+        int price = applyDiscounts(offer.price);
         if (goldAvailable < price) return new PurchaseResult(false, 0, "Nicht genug Gold.");
 
-        switch (o.type) {
+        switch (offer.type) {
             case PASSIVE -> {
-                Item it = o.item;
-                if (it.unique && boughtUniques.contains(it.id)) {
+                Item item = offer.item;
+                if (item.unique && boughtUniques.contains(item.id)) {
                     return new PurchaseResult(false, 0, "Unique bereits gekauft.");
                 }
-                it.applyTo(passiveStats);
-                if (it.unique) boughtUniques.add(it.id);
-                if ("u_lucky_charm".equals(it.id)) shopRerollDiscount = 2;
-                if ("bargain_hunter".equals(it.id)) shopPriceDiscountPct = Math.min(50, shopPriceDiscountPct + 15);
-                return new PurchaseResult(true, price, "Gekauft: " + it.name);
+                item.applyTo(passiveStats);
+                if (item.unique) boughtUniques.add(item.id);
+                if ("u_lucky_charm".equals(item.id)) shopRerollDiscount = 2;
+                if ("bargain_hunter".equals(item.id)) shopPriceDiscountPct = Math.min(50, shopPriceDiscountPct + 15);
+                return new PurchaseResult(true, price, "Gekauft: " + item.name);
             }
             case WEAPON -> {
-                WeaponInstance wi = new WeaponInstance(o.weaponDef, o.tier);
-                WeaponHotbar.Result res = hotbar.tryAddOrCombine(wi);
+                WeaponInstance instance = new WeaponInstance(offer.weaponDef, offer.tier);
+                WeaponHotbar.Result res = hotbar.tryAddOrCombine(instance);
                 if (!res.success()) return new PurchaseResult(false, 0, "Hotbar voll (kein Combine möglich).");
                 return new PurchaseResult(true, price, res.added() ? "Waffe hinzugefügt" : "Waffe kombiniert");
             }
         }
         return new PurchaseResult(false, 0, "Unbekannter Typ.");
     }
+    private void ensureLayout() {
+        if (!layoutDirty) {
+            return;
+        }
+        layoutDirty = false;
 
-    // ------------------- UI / Layout -----------------------------------------
+        cardUIs.clear();
+        hotbarUIs.clear();
+
+        int margin = Math.max(48, Math.min(canvasW, canvasH) / 12);
+        int panelW = Math.min(1180, canvasW - margin * 2);
+        panelW = Math.max(760, panelW);
+        int basePanelH = 560;
+        int panelH = Math.max(basePanelH, Math.min(canvasH - margin * 2, 700));
+        panelRect = Layout.center(canvasW, canvasH, panelW, panelH);
+
+        int padding = 32;
+        int titleHeight = 48;
+        int buttonHeight = 44;
+        int buttonY = panelRect.y + padding + titleHeight;
+
+        rerollBtn = Layout.alignLeft(panelRect, padding, buttonY, 200, buttonHeight);
+        nextBtn = Layout.alignRight(panelRect, padding, buttonY, 220, buttonHeight);
+
+        int cardsTop = buttonY + buttonHeight + 28;
+        int cardHeight = 220;
+        List<Rectangle> cardRects = Layout.cardRow(panelRect, padding, cardsTop, cardHeight, offers.size(), 24);
+        for (Rectangle rect : cardRects) {
+            CardUI ui = new CardUI();
+            ui.bounds = rect;
+            int pillWidth = Math.min(120, rect.width / 3);
+            int pillHeight = 32;
+            ui.priceTag = new Rectangle(rect.x + 16, rect.y + rect.height - pillHeight - 16, pillWidth, pillHeight);
+            int buttonWidth = Math.min(140, rect.width / 3 + 40);
+            ui.buyBtn = new Rectangle(rect.x + rect.width - buttonWidth - 16, rect.y + rect.height - pillHeight - 16, buttonWidth, pillHeight);
+            int badgeWidth = Math.min(140, rect.width / 2);
+            ui.rarityTag = new Rectangle(rect.x + 16, rect.y + 16, badgeWidth, 28);
+            cardUIs.add(ui);
+        }
+
+        int hotbarHeight = 140;
+        hotbarRect = Layout.hotbarArea(panelRect, padding, hotbarHeight);
+        Rectangle slotsArea = new Rectangle(hotbarRect.x, hotbarRect.y + 48, hotbarRect.width, hotbarHeight - 56);
+        List<Rectangle> slotRects = Layout.distributeHorizontally(new Rectangle(slotsArea.x, slotsArea.y, slotsArea.width, 72), hotbar.capacity(), 18);
+        List<WeaponInstance> slots = hotbar.getSlots();
+        for (int i = 0; i < slotRects.size(); i++) {
+            HotbarSlotUI ui = new HotbarSlotUI();
+            ui.index = i;
+            ui.bounds = slotRects.get(i);
+            ui.weapon = i < slots.size() ? slots.get(i) : null;
+            ui.sellBtn = new Rectangle(ui.bounds.x + ui.bounds.width - 78, ui.bounds.y + ui.bounds.height - 34, 68, 28);
+            hotbarUIs.add(ui);
+        }
+
+        messageRect = new Rectangle(panelRect.x + padding, hotbarRect.y - 28, panelRect.width - padding * 2, 24);
+    }
+
+    private void drawButtons(Graphics2D g, Player player) {
+        int cost = getRerollCost();
+        boolean canReroll = player.gold >= cost;
+        Color rerollColor = canReroll ? (isHover(rerollBtn) ? Colors.BUTTON_PRIMARY_HOVER : Colors.BUTTON_PRIMARY) : Colors.BUTTON_DISABLED;
+        g.setFont(Fonts.bold(15));
+        Draw.drawButton(g, rerollBtn, "Reroll (" + cost + "G)", rerollColor, Colors.TEXT_PRIMARY);
+
+        Color startColor = isHover(nextBtn) ? Colors.SUCCESS_HOVER : Colors.SUCCESS;
+        Draw.drawButton(g, nextBtn, "Start Next Wave", startColor, Colors.TEXT_PRIMARY);
+    }
+
+    private void drawCard(Graphics2D g, CardUI ui, Offer offer, Player player) {
+        boolean hover = ui.bounds.contains(pointerX, pointerY);
+        g.setColor(hover ? new Color(38, 42, 58) : new Color(30, 34, 46));
+        g.fillRoundRect(ui.bounds.x, ui.bounds.y, ui.bounds.width, ui.bounds.height, 20, 20);
+        g.setColor(new Color(62, 72, 94));
+        g.drawRoundRect(ui.bounds.x, ui.bounds.y, ui.bounds.width, ui.bounds.height, 20, 20);
+
+        g.setFont(Fonts.bold(12));
+        Draw.drawBadge(g, ui.rarityTag, offer.rarity.name(), Colors.rarity(offer.rarity), Colors.BADGE_TEXT);
+
+        g.setFont(Fonts.bold(18));
+        g.setColor(Colors.TEXT_PRIMARY);
+        g.drawString(offer.title, ui.bounds.x + 20, ui.bounds.y + 58);
+
+        g.setFont(Fonts.regular(14));
+        int textY = ui.bounds.y + 88;
+        for (String line : formatMods(offer.mods)) {
+            g.setColor(colorForLine(line));
+            g.drawString("• " + line, ui.bounds.x + 22, textY);
+            textY += 20;
+            if (textY > ui.bounds.y + ui.bounds.height - 76) break;
+        }
+
+        int price = applyDiscounts(offer.price);
+        boolean affordable = player.gold >= price;
+        Color pillColor = affordable ? Colors.SUCCESS : Colors.DANGER;
+        g.setFont(Fonts.bold(14));
+        Draw.drawPill(g, ui.priceTag, price + "G", pillColor, Colors.TEXT_PRIMARY);
+
+        Color buttonColor = affordable ? (isHover(ui.buyBtn) ? Colors.BUTTON_PRIMARY_HOVER : Colors.BUTTON_PRIMARY) : Colors.BUTTON_DISABLED;
+        Draw.drawButton(g, ui.buyBtn, "BUY", buttonColor, Colors.TEXT_PRIMARY);
+    }
+
+    private void drawHotbar(Graphics2D g) {
+        g.setColor(new Color(12, 16, 24, 160));
+        g.fillRoundRect(hotbarRect.x, hotbarRect.y, hotbarRect.width, hotbarRect.height, 20, 20);
+        g.setColor(new Color(52, 60, 78, 200));
+        g.drawRoundRect(hotbarRect.x, hotbarRect.y, hotbarRect.width, hotbarRect.height, 20, 20);
+
+        g.setFont(Fonts.bold(16));
+        g.setColor(Colors.TEXT_PRIMARY);
+        g.drawString("Weapons", hotbarRect.x + 18, hotbarRect.y + 30);
+
+        for (HotbarSlotUI slot : hotbarUIs) {
+            drawHotbarSlot(g, slot);
+        }
+    }
+
+    private void drawHotbarSlot(Graphics2D g, HotbarSlotUI slot) {
+        g.setColor(new Color(30, 34, 46));
+        g.fillRoundRect(slot.bounds.x, slot.bounds.y, slot.bounds.width, slot.bounds.height, 16, 16);
+        g.setColor(new Color(62, 72, 94));
+        g.drawRoundRect(slot.bounds.x, slot.bounds.y, slot.bounds.width, slot.bounds.height, 16, 16);
+
+        if (slot.weapon != null) {
+            g.setFont(Fonts.bold(14));
+            g.setColor(Colors.TEXT_PRIMARY);
+            g.drawString(slot.weapon.displayName(), slot.bounds.x + 16, slot.bounds.y + 24);
+
+            g.setFont(Fonts.regular(12));
+            g.setColor(Colors.TEXT_SECONDARY);
+            g.drawString(compactMods(slot.weapon.mods()), slot.bounds.x + 16, slot.bounds.y + 44);
+
+            int refund = refundValue(slot.weapon);
+            g.setFont(Fonts.bold(13));
+            Color sellColor = isHover(slot.sellBtn) ? Colors.DANGER.brighter() : Colors.DANGER;
+            Draw.drawButton(g, slot.sellBtn, "SELL (" + refund + "G)", sellColor, Colors.TEXT_PRIMARY);
+        } else {
+            g.setFont(Fonts.italic(13));
+            g.setColor(Colors.TEXT_MUTED);
+            g.drawString("Empty", slot.bounds.x + 16, slot.bounds.y + 36);
+        }
+    }
+
+    private boolean trySellWeapon(Input input, Player player) {
+        for (HotbarSlotUI slot : hotbarUIs) {
+            if (slot.weapon == null) continue;
+            if (slot.sellBtn.contains(input.mouseX, input.mouseY)) {
+                WeaponInstance removed = hotbar.remove(slot.index);
+                if (removed != null) {
+                    int refund = refundValue(removed);
+                    player.gold += refund;
+                    lastMessage = "Verkauft: " + removed.displayName() + " (+" + refund + "G)";
+                    markLayoutDirty();
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private int refundValue(WeaponInstance weapon) {
+        return Math.max(1, (int) Math.round(weapon.price() * 0.5));
+    }
+
+    private boolean isHover(Rectangle rect) {
+        return rect.contains(pointerX, pointerY);
+    }
+
+    private void markLayoutDirty() {
+        layoutDirty = true;
+    }
 
     private static final class CardUI {
         Rectangle bounds;
@@ -322,197 +500,12 @@ public class Shop {
         Rectangle rarityTag;
     }
 
-    private void computeLayout() {
-        cardUIs.clear();
-        int startX = (SCREEN_W - PANEL_W) / 2 + 28;
-        int startY = (SCREEN_H - PANEL_H) / 2 + 96;
-
-        int col = 0, row = 0;
-        for (int i = 0; i < offers.size(); i++) {
-            int x = startX + col * (CARD_W + GRID_GAP_X);
-            int y = startY + row * (CARD_H + GRID_GAP_Y);
-
-            CardUI ui = new CardUI();
-            ui.bounds = new Rectangle(x, y, CARD_W, CARD_H);
-            ui.buyBtn = new Rectangle(x + CARD_W - 110, y + CARD_H - 40, 96, 28);
-            ui.priceTag = new Rectangle(x + 12, y + CARD_H - 40, 86, 28);
-            ui.rarityTag = new Rectangle(x + 12, y + 10, 84, 22);
-            cardUIs.add(ui);
-
-            col++;
-            if (col >= GRID_COLS) { col = 0; row++; }
-        }
-
-        // Footer-Buttons zentriert unter Grid
-        int panelX = (SCREEN_W - PANEL_W) / 2;
-        int panelY = (SCREEN_H - PANEL_H) / 2;
-        rerollBtn = new Rectangle(panelX + 28, panelY + PANEL_H - 64, 180, 36);
-        nextBtn   = new Rectangle(panelX + PANEL_W - 208, panelY + PANEL_H - 64, 180, 36);
+    private static final class HotbarSlotUI {
+        int index;
+        Rectangle bounds;
+        Rectangle sellBtn;
+        WeaponInstance weapon;
     }
-
-    private void relayoutAfterRemoval() {
-        // Einfach neu berechnen
-        computeLayout();
-    }
-
-    private void drawPanel(Graphics2D g, int x, int y, int w, int h) {
-        // Schatten
-        g.setColor(new Color(0, 0, 0, 80));
-        g.fillRoundRect(x+4, y+6, w, h, 18, 18);
-        // Panel
-        g.setColor(new Color(24, 27, 36));
-        g.fillRoundRect(x, y, w, h, 18, 18);
-        // Border
-        g.setColor(new Color(60, 70, 90));
-        g.setStroke(new BasicStroke(2f));
-        g.drawRoundRect(x, y, w, h, 18, 18);
-    }
-
-    private void drawCard(Graphics2D g, CardUI ui, Offer o, Player p) {
-        boolean affordable = p.gold >= applyDiscounts(o.price);
-        boolean hover = isHover(ui.bounds, g);
-
-        // Karte
-        g.setColor(hover ? new Color(36, 40, 54) : new Color(30, 34, 46));
-        g.fill(new RoundRectangle2D.Float(ui.bounds.x, ui.bounds.y, ui.bounds.width, ui.bounds.height, 14, 14));
-        g.setColor(new Color(65, 75, 96));
-        g.setStroke(new BasicStroke(1.6f));
-        g.draw(new RoundRectangle2D.Float(ui.bounds.x, ui.bounds.y, ui.bounds.width, ui.bounds.height, 14, 14));
-
-        // Rarity-Badge
-        drawBadge(g, ui.rarityTag, o.rarity.name(), rarityColor(o.rarity));
-
-        // Title
-        g.setColor(new Color(220, 230, 255));
-        g.setFont(new Font("Inter", Font.BOLD, 18));
-        g.drawString(o.title, ui.bounds.x + 12, ui.bounds.y + 50);
-
-        // Mods
-        g.setFont(new Font("Inter", Font.PLAIN, 14));
-        int y = ui.bounds.y + 74;
-        for (String line : formatMods(o.mods)) {
-            g.setColor(colorForLine(line));
-            g.drawString("• " + line, ui.bounds.x + 14, y);
-            y += 18;
-            if (y > ui.bounds.y + ui.bounds.height - 50) break; // nicht überlaufen
-        }
-
-        // Price Tag (links unten)
-        int price = applyDiscounts(o.price);
-        drawPill(g, ui.priceTag, price + "G", affordable ? new Color(64, 159, 108) : new Color(180, 80, 80));
-
-        // BUY Button (rechts unten)
-        drawButton(g, ui.buyBtn, "BUY", affordable, isHover(ui.buyBtn, g));
-    }
-
-    private void drawHotbar(Graphics2D g, int x, int y) {
-        g.setFont(new Font("Inter", Font.PLAIN, 13));
-        g.setColor(new Color(170, 185, 210));
-        g.drawString("Weapons:", x, y - 6);
-
-        int slotW = 200, slotH = 52, gap = 14;
-        List<WeaponInstance> slots = hotbar.getSlots();
-
-        for (int i = 0; i < hotbar.capacity(); i++) {
-            int sx = x + i * (slotW + gap);
-            int sy = y;
-            boolean filled = i < slots.size();
-            // Slot
-            g.setColor(new Color(28, 31, 42));
-            g.fillRoundRect(sx, sy, slotW, slotH, 10, 10);
-            g.setColor(new Color(60, 70, 90));
-            g.drawRoundRect(sx, sy, slotW, slotH, 10, 10);
-
-            if (filled) {
-                WeaponInstance w = slots.get(i);
-                g.setColor(new Color(220, 230, 255));
-                g.setFont(new Font("Inter", Font.BOLD, 14));
-                g.drawString(w.displayName(), sx + 10, sy + 20);
-
-                g.setFont(new Font("Inter", Font.PLAIN, 12));
-                String mods = compactMods(w.mods());
-                g.setColor(new Color(180, 195, 220));
-                g.drawString(mods, sx + 10, sy + 38);
-            } else {
-                g.setColor(new Color(120, 135, 160));
-                g.setFont(new Font("Inter", Font.ITALIC, 13));
-                g.drawString("Empty", sx + 10, sy + 30);
-            }
-        }
-    }
-
-    private void drawButton(Graphics2D g, Rectangle r, String label, boolean enabled, boolean hover) {
-        Color base = enabled ? new Color(70, 120, 240) : new Color(80, 80, 100);
-        if (hover && enabled) base = new Color(86, 136, 255);
-        g.setColor(base);
-        g.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10);
-        g.setColor(new Color(240, 245, 255));
-        g.setFont(new Font("Inter", Font.BOLD, 14));
-        drawCenteredIn(g, label, r);
-    }
-    private void drawPrimaryButton(Graphics2D g, Rectangle r, String label, boolean enabled, boolean hover) {
-        drawButton(g, r, label, enabled, hover);
-    }
-    private void drawSuccessButton(Graphics2D g, Rectangle r, String label, boolean enabled, boolean hover) {
-        Color base = enabled ? new Color(64, 159, 108) : new Color(80, 100, 90);
-        if (hover && enabled) base = new Color(82, 180, 128);
-        g.setColor(base);
-        g.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10);
-        g.setColor(new Color(240, 245, 255));
-        g.setFont(new Font("Inter", Font.BOLD, 14));
-        drawCenteredIn(g, label, r);
-    }
-
-    private void drawPill(Graphics2D g, Rectangle r, String label, Color c) {
-        g.setColor(c);
-        g.fillRoundRect(r.x, r.y, r.width, r.height, 12, 12);
-        g.setColor(new Color(250, 255, 255));
-        g.setFont(new Font("Inter", Font.BOLD, 14));
-        drawCenteredIn(g, label, r);
-    }
-
-    private void drawBadge(Graphics2D g, Rectangle r, String label, Color c) {
-        g.setColor(c);
-        g.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10);
-        g.setColor(Color.BLACK);
-        g.setFont(new Font("Inter", Font.BOLD, 12));
-        drawCenteredIn(g, label, r);
-    }
-
-    private boolean isHover(Rectangle r, Graphics2D g) {
-        // Wir haben keine direkte Maus-API hier, aber Input prüft beim Klick. Hover nutzen wir nur optisch:
-        // Wenn du echtes Hover willst, gib der Shop.render Input oder speichere Mauspos global.
-        return false;
-    }
-
-    private static void drawCentered(Graphics2D g, String text, int width, int y){
-        int w = g.getFontMetrics().stringWidth(text);
-        g.drawString(text, (width - w) / 2, y);
-    }
-    private static void drawCenteredIn(Graphics2D g, String text, Rectangle r) {
-        int tw = g.getFontMetrics().stringWidth(text);
-        int th = g.getFontMetrics().getAscent();
-        int x = r.x + (r.width - tw) / 2;
-        int y = r.y + (r.height + th) / 2 - 3;
-        g.drawString(text, x, y);
-    }
-
-    private static Color rarityColor(ItemRarity r) {
-        return switch (r) {
-            case COMMON -> new Color(130, 140, 160);
-            case UNCOMMON -> new Color(76, 175, 80);
-            case RARE -> new Color(66, 165, 245);
-            case EPIC -> new Color(171, 71, 188);
-        };
-    }
-
-    private static Color colorForLine(String line) {
-        if (line.startsWith("+")) return new Color(144, 238, 144);
-        if (line.startsWith("-")) return new Color(255, 160, 160);
-        return new Color(200, 210, 230);
-    }
-
-    // ------------------- Zufallsauswahl / Preise ------------------------------
 
     private int computeSlots(int harvesting) {
         int slots = 4 + Integer.compare(harvesting, 0);
@@ -520,107 +513,104 @@ public class Shop {
     }
 
     private int applyDiscounts(int price) {
-        int p = price;
-        if (shopPriceDiscountPct != 0) {
-            p = (int)Math.round(p * (1.0 - shopPriceDiscountPct/100.0));
+        int discounted = price;
+        if (shopPriceDiscountPct > 0) {
+            discounted = (int) Math.round(price * (1.0 - shopPriceDiscountPct / 100.0));
         }
-        return Math.max(1, p);
+        return Math.max(1, discounted);
     }
 
     private Item randomPassiveItem(int luck) {
         ThreadLocalRandom rnd = ThreadLocalRandom.current();
-        List<Item> pool = new ArrayList<>();
-        for (Item it : passivePool) {
-            if (it.unique && boughtUniques.contains(it.id)) continue;
-            pool.add(it);
-        }
-        int total = 0;
-        int[] weights = new int[pool.size()];
-        for (int i = 0; i < pool.size(); i++) {
-            Item it = pool.get(i);
-            double mult = 1.0 + Math.max(0, luck) * 0.01 * it.rarity.rank();
-            int w = (int)Math.max(1, Math.round(it.rarity.weight * mult));
-            weights[i] = w; total += w;
-        }
-        int pick = rnd.nextInt(Math.max(1, total));
-        for (int i = 0; i < pool.size(); i++) if ((pick -= weights[i]) < 0) return pool.get(i);
-        return pool.get(pool.size()-1);
+        int pick = rnd.nextInt(passivePool.size());
+        return passivePool.get(pick);
     }
 
     private WeaponDef randomWeaponDef(int luck) {
-        ThreadLocalRandom rnd = ThreadLocalRandom.current();
         List<WeaponDef> pool = new ArrayList<>(weapons.values());
-        int total = 0;
         int[] weights = new int[pool.size()];
+        int total = 0;
         for (int i = 0; i < pool.size(); i++) {
             WeaponDef def = pool.get(i);
             double mult = 1.0 + Math.max(0, luck) * 0.008 * def.rarityHint.rank();
-            int w = (int)Math.max(1, Math.round(def.rarityHint.weight * mult));
-            weights[i] = w; total += w;
+            int weight = (int) Math.max(1, Math.round(def.rarityHint.weight * mult));
+            weights[i] = weight;
+            total += weight;
         }
-        int pick = rnd.nextInt(Math.max(1, total));
-        for (int i = 0; i < pool.size(); i++) if ((pick -= weights[i]) < 0) return pool.get(i);
+        int pick = ThreadLocalRandom.current().nextInt(Math.max(1, total));
+        for (int i = 0; i < pool.size(); i++) {
+            pick -= weights[i];
+            if (pick < 0) return pool.get(i);
+        }
         return pool.get(0);
     }
 
     private WeaponTier randomWeaponTier(int luck) {
-        int c = bias(70, 0, luck);
-        int u = bias(22, 1, luck);
-        int r = bias(7,  2, luck);
-        int e = bias(1,  3, luck);
-        int total = c+u+r+e;
+        int common = bias(70, 0, luck);
+        int uncommon = bias(22, 1, luck);
+        int rare = bias(7, 2, luck);
+        int epic = bias(1, 3, luck);
+        int total = common + uncommon + rare + epic;
         int pick = ThreadLocalRandom.current().nextInt(total);
-        if ((pick -= c) < 0) return WeaponTier.COMMON;
-        if ((pick -= u) < 0) return WeaponTier.UNCOMMON;
-        if ((pick -= r) < 0) return WeaponTier.RARE;
+        if ((pick -= common) < 0) return WeaponTier.COMMON;
+        if ((pick -= uncommon) < 0) return WeaponTier.UNCOMMON;
+        if ((pick -= rare) < 0) return WeaponTier.RARE;
         return WeaponTier.EPIC;
     }
+
     private int bias(int base, int rank, int luck) {
         double mult = 1.0 + Math.max(0, luck) * 0.012 * rank;
-        return (int)Math.max(1, Math.round(base * mult));
+        return (int) Math.max(1, Math.round(base * mult));
     }
 
-    // ------------------- Formatierung -----------------------------------------
-
-    private static List<String> formatMods(List<Mod> mods){
+    private static List<String> formatMods(List<Mod> mods) {
         List<String> out = new ArrayList<>();
-        for (Mod m : mods) {
-            String name = pretty(m.stat());
-            int a = m.amount();
-            String sign = a >= 0 ? "+" : "";
-            String suffix = isPercent(m.stat()) ? "%" : (m.stat()== Stat.RANGE_PX ? "" : "");
-            if (m.stat()==Stat.RANGE_PX) {
-                out.add(sign + (a*6) + " " + name); // 1P ~ 6px
+        for (Mod mod : mods) {
+            String name = pretty(mod.stat());
+            int amount = mod.amount();
+            String sign = amount >= 0 ? "+" : "";
+            String suffix = isPercent(mod.stat()) ? "%" : (mod.stat() == Stat.RANGE_PX ? "" : "");
+            if (mod.stat() == Stat.RANGE_PX) {
+                out.add(sign + (amount * 6) + " " + name);
             } else {
-                out.add(sign + a + suffix + " " + name);
+                out.add(sign + amount + suffix + " " + name);
             }
         }
         return out;
     }
-    private static String compactMods(List<Mod> mods){
+
+    private static String compactMods(List<Mod> mods) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < mods.size(); i++) {
-            Mod m = mods.get(i);
-            int a = m.amount(); String sign = a>=0?"+":"";
-            if (m.stat()==Stat.RANGE_PX) sb.append(sign).append(a*6).append(" Range");
-            else if (isPercent(m.stat())) sb.append(sign).append(a).append("% ").append(shortName(m.stat()));
-            else sb.append(sign).append(a).append(" ").append(shortName(m.stat()));
-            if (i < mods.size()-1) sb.append("  ");
+            Mod mod = mods.get(i);
+            int amount = mod.amount();
+            String sign = amount >= 0 ? "+" : "";
+            if (mod.stat() == Stat.RANGE_PX) sb.append(sign).append(amount * 6).append(" Range");
+            else if (isPercent(mod.stat())) sb.append(sign).append(amount).append("% ").append(shortName(mod.stat()));
+            else sb.append(sign).append(amount).append(" ").append(shortName(mod.stat()));
+            if (i < mods.size() - 1) sb.append("  ");
         }
         return sb.toString();
     }
 
-    private static boolean isPercent(Stat s){
-        return switch (s) {
+    private static Color colorForLine(String line) {
+        if (line.startsWith("+")) return new Color(144, 238, 144);
+        if (line.startsWith("-")) return new Color(255, 160, 160);
+        return Colors.TEXT_SECONDARY;
+    }
+
+    private static boolean isPercent(Stat stat) {
+        return switch (stat) {
             case ARMOR_PCT, DODGE_PCT, DAMAGE_PCT, MELEE_PCT, RANGED_PCT, MAGIC_PCT,
-                 CRIT_CHANCE_PCT, CRIT_DAMAGE_PCT, ATTACK_SPEED_PCT, PROJECTILE_SPEED_PCT,
-                 PROJECTILE_SIZE_PCT, HOMING_CHANCE_PCT, HOMING_STRENGTH_PCT,
-                 MOVE_SPEED_PCT, LIFESTEAL_PCT, BOSS_DAMAGE_PCT -> true;
+                    CRIT_CHANCE_PCT, CRIT_DAMAGE_PCT, ATTACK_SPEED_PCT, PROJECTILE_SPEED_PCT,
+                    PROJECTILE_SIZE_PCT, HOMING_CHANCE_PCT, HOMING_STRENGTH_PCT,
+                    MOVE_SPEED_PCT, LIFESTEAL_PCT, BOSS_DAMAGE_PCT -> true;
             default -> false;
         };
     }
-    private static String pretty(Stat s){
-        return switch (s) {
+
+    private static String pretty(Stat stat) {
+        return switch (stat) {
             case MAX_HP -> "Max HP";
             case ARMOR_PCT -> "Armor";
             case DODGE_PCT -> "Dodge";
@@ -647,8 +637,9 @@ public class Shop {
             case BOSS_DAMAGE_PCT -> "Boss Damage";
         };
     }
-    private static String shortName(Stat s){
-        return switch (s) {
+
+    private static String shortName(Stat stat) {
+        return switch (stat) {
             case MAX_HP -> "HP";
             case ARMOR_PCT -> "Armor";
             case DODGE_PCT -> "Dodge";

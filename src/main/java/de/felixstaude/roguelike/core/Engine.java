@@ -1,107 +1,98 @@
 package de.felixstaude.roguelike.core;
 
 import de.felixstaude.roguelike.combat.DamageSystem;
-import de.felixstaude.roguelike.entity.*;
+import de.felixstaude.roguelike.entity.Bullet;
+import de.felixstaude.roguelike.entity.Enemy;
+import de.felixstaude.roguelike.entity.Particle;
+import de.felixstaude.roguelike.entity.Player;
 import de.felixstaude.roguelike.input.Input;
 import de.felixstaude.roguelike.math.Vec2;
 import de.felixstaude.roguelike.shop.Shop;
 import de.felixstaude.roguelike.ui.HUD;
+import de.felixstaude.roguelike.util.Colors;
+import de.felixstaude.roguelike.util.Draw;
 import de.felixstaude.roguelike.world.Arena;
 import de.felixstaude.roguelike.world.EnemySpawner;
 import de.felixstaude.roguelike.world.WaveManager;
 
-import java.awt.*;
+import java.awt.BasicStroke;
+import java.awt.Graphics2D;
+import java.awt.Rectangle;
 import java.awt.event.KeyEvent;
-import java.awt.image.BufferStrategy;
+import java.awt.geom.AffineTransform;
+import java.awt.geom.Point2D;
 import java.util.ArrayList;
 import java.util.List;
 
-public class Engine implements Runnable {
-    public static final int WIDTH = 1280;
-    public static final int HEIGHT = 720;
+/**
+ * Coordinates the high level game states and delegates tick/render work to the underlying systems.
+ */
+public class Engine implements GameLoop.Handler {
     public static final int TARGET_UPS = 60;
-    public static final double DT = 1.0 / TARGET_UPS;
 
     private final GameCanvas canvas;
+    private final GameLoop loop;
     private final Input input = new Input();
-    private final Camera camera = new Camera();
+    private final EngineArena arenaViewport = new EngineArena();
+    private final Runnable toggleFullscreen;
+
     private final Player player = new Player();
-    private final Arena arena = new Arena(0, 0, WIDTH, HEIGHT);
+    private final Arena worldBounds = new Arena(0, 0, EngineArena.ARENA_W, EngineArena.ARENA_H);
 
     private final List<Bullet> bullets = new ArrayList<>();
     private final List<Particle> particles = new ArrayList<>();
     private final List<Enemy> enemies = new ArrayList<>();
-    private final EnemySpawner spawner = new EnemySpawner(arena);
+    private final EnemySpawner spawner = new EnemySpawner(worldBounds);
     private final DamageSystem damageSystem = new DamageSystem(player, bullets, enemies, particles);
     private final WaveManager waves = new WaveManager(30.0);
     private final Shop shop = new Shop();
 
-    private Thread loopThread;
-    private volatile boolean running = false;
-    private boolean showDebug = true;
-    private double fps, ups;
-
     private GameState state = GameState.RUNNING;
-    private final Rectangle restartButton = new Rectangle(WIDTH/2 - 120, HEIGHT/2 + 20, 240, 48);
+    private boolean showDebug = true;
 
-    public Engine(GameCanvas canvas) {
+    private int lastCanvasW = -1;
+    private int lastCanvasH = -1;
+    private Rectangle restartButton = new Rectangle();
+
+    public Engine(GameCanvas canvas, Runnable toggleFullscreen) {
         this.canvas = canvas;
+        this.toggleFullscreen = toggleFullscreen;
+        this.loop = new GameLoop(canvas, TARGET_UPS, this);
+
         canvas.addKeyListener(input);
         canvas.addMouseListener(input);
         canvas.addMouseMotionListener(input);
         canvas.setFocusable(true);
         canvas.requestFocus();
 
-        camera.viewW = WIDTH; camera.viewH = HEIGHT;
-        player.pos.set(WIDTH / 2.0, HEIGHT / 2.0);
+        input.onKeyPressed = code -> {
+            if (code == KeyEvent.VK_F3) {
+                showDebug = !showDebug;
+            }
+            if (code == KeyEvent.VK_F11 && toggleFullscreen != null) {
+                toggleFullscreen.run();
+            }
+        };
 
-        // Initiale Wave-Parameter an den Spawner
+        player.pos.set(worldBounds.w / 2.0, worldBounds.h / 2.0);
         spawner.onWaveStart(waves.getWave());
-
-        input.onKeyPressed = code -> { if (code == KeyEvent.VK_F3) showDebug = !showDebug; };
     }
 
     public void start() {
-        if (running) return;
-        running = true;
-        loopThread = new Thread(this, "GameLoop");
-        loopThread.start();
+        loop.start();
     }
 
-    @Override public void run() {
-        canvas.createBufferStrategy(3);
-        BufferStrategy bs = canvas.getBufferStrategy();
-
-        long prev = System.nanoTime();
-        double acc = 0.0;
-        long fpsTimer = System.currentTimeMillis();
-        int frames = 0, updates = 0;
-
-        while (running) {
-            long now = System.nanoTime();
-            double delta = (now - prev) / 1_000_000_000.0;
-            prev = now;
-            acc += delta;
-
-            while (acc >= DT) { update(DT); acc -= DT; updates++; }
-
-            do {
-                do {
-                    Graphics2D g = (Graphics2D) bs.getDrawGraphics();
-                    try { render(g); } finally { g.dispose(); }
-                } while (bs.contentsRestored());
-                bs.show();
-            } while (bs.contentsLost());
-            frames++;
-
-            if (System.currentTimeMillis() - fpsTimer >= 1000) {
-                fps = frames; ups = updates; frames = 0; updates = 0; fpsTimer += 1000;
-            }
-        }
+    public void stop() {
+        loop.stop();
     }
 
-    private void update(double dt) {
+    @Override
+    public void onUpdate(double dt) {
+        ensureCanvasSize();
         input.poll();
+
+        Point2D.Double mouseWorld = arenaViewport.toWorld(input.mouseX, input.mouseY);
+        input.setMouseWorld(mouseWorld.x, mouseWorld.y);
 
         if (state == GameState.GAME_OVER) {
             if (input.wasPressed(KeyEvent.VK_R) ||
@@ -112,39 +103,49 @@ public class Engine implements Runnable {
         }
 
         if (state == GameState.SHOP) {
-            boolean start = shop.handleInput(input, player);
-            if (start) {
+            shop.updatePointer(input.mouseX, input.mouseY);
+            boolean startNext = shop.handleInput(input, player);
+            if (startNext) {
                 waves.nextWave();
-                spawner.onWaveStart(waves.getWave()); // <<< neue Wave -> neuen Schwierigkeitsmodus aktivieren
+                spawner.onWaveStart(waves.getWave());
                 state = GameState.RUNNING;
             }
             return;
         }
 
-        // RUNNING
-        double ax=0, ay=0;
+        updateRunning(dt);
+    }
+
+    private void updateRunning(double dt) {
+        double ax = 0;
+        double ay = 0;
         if (input.isDown(KeyEvent.VK_W)) ay -= 1;
         if (input.isDown(KeyEvent.VK_S)) ay += 1;
         if (input.isDown(KeyEvent.VK_A)) ax -= 1;
         if (input.isDown(KeyEvent.VK_D)) ax += 1;
         Vec2 move = new Vec2(ax, ay).normalized();
 
-        player.update(dt, move, input.mouseX, input.mouseY, bullets, particles);
-
-        player.pos.x = Math.max(arena.x + player.radius, Math.min(arena.x + arena.w - player.radius, player.pos.x));
-        player.pos.y = Math.max(arena.y + player.radius, Math.min(arena.y + arena.h - player.radius, player.pos.y));
+        player.update(dt, move, input.mouseWorldX, input.mouseWorldY, bullets, particles);
+        arenaViewport.clampWorld(player.pos, player.radius);
 
         waves.update(dt);
         spawner.update(dt, enemies, player);
 
-        for (Enemy e : enemies) {
-            e.update(dt, player, bullets);
-            e.pos.x = Math.max(arena.x + e.radius, Math.min(arena.x + arena.w - e.radius, e.pos.x));
-            e.pos.y = Math.max(arena.y + e.radius, Math.min(arena.y + arena.h - e.radius, e.pos.y));
+        for (Enemy enemy : enemies) {
+            enemy.update(dt, player, bullets);
+            arenaViewport.clampWorld(enemy.pos, enemy.radius);
         }
 
-        for (int i = bullets.size()-1; i>=0; i--) { Bullet b = bullets.get(i); b.update(dt, enemies); if (b.dead) bullets.remove(i); }
-        for (int i = particles.size()-1; i>=0; i--) { Particle p = particles.get(i); p.update(dt); if (p.dead) particles.remove(i); }
+        for (int i = bullets.size() - 1; i >= 0; i--) {
+            Bullet b = bullets.get(i);
+            b.update(dt, enemies);
+            if (b.dead) bullets.remove(i);
+        }
+        for (int i = particles.size() - 1; i >= 0; i--) {
+            Particle p = particles.get(i);
+            p.update(dt);
+            if (p.dead) particles.remove(i);
+        }
 
         damageSystem.update(dt);
 
@@ -159,11 +160,82 @@ public class Engine implements Runnable {
             particles.clear();
             shop.prepareForWave(waves.getWave(), player);
             state = GameState.SHOP;
-            return;
         }
 
         if (input.wasPressed(KeyEvent.VK_K)) player.damage(8);
         if (input.wasPressed(KeyEvent.VK_L)) player.heal(8);
+    }
+
+    @Override
+    public void onRender(Graphics2D g) {
+        ensureCanvasSize();
+
+        g.setColor(Colors.BACKDROP);
+        g.fillRect(0, 0, canvas.getWidth(), canvas.getHeight());
+        Draw.applyQualityHints(g);
+
+        arenaViewport.renderBackground(g);
+        AffineTransform old = g.getTransform();
+        arenaViewport.applyWorldTransform(g);
+        drawWorld(g);
+        g.setTransform(old);
+
+        Rectangle view = arenaViewport.getViewportRect();
+        if (state == GameState.RUNNING) {
+            String title = String.format("Wave %d — %02d:%02d", waves.getWave(),
+                    (int) (waves.getTimeLeft() / 60), (int) (waves.getTimeLeft() % 60));
+            HUD.drawTopBanner(g, view, title);
+        } else if (state == GameState.SHOP) {
+            HUD.drawTopBanner(g, view, "Shop – Wave " + waves.getWave() + " beendet");
+        }
+
+        HUD.drawBars(g, player, view);
+        if (showDebug) {
+            HUD.drawDebug(g, view, loop.getFps(), loop.getUps(), bullets.size(), particles.size(), player);
+        }
+
+        if (state == GameState.GAME_OVER) {
+            HUD.drawGameOverOverlay(g, canvas.getWidth(), canvas.getHeight(), restartButton);
+        } else if (state == GameState.SHOP) {
+            shop.render(g, player, waves.getWave());
+        } else {
+            HUD.drawCrosshair(g, input.mouseCanvasX, input.mouseCanvasY);
+        }
+    }
+
+    private void drawWorld(Graphics2D g) {
+        float invScale = (float) (1.0 / Math.max(0.0001, arenaViewport.getScale()));
+        g.setStroke(new BasicStroke(invScale));
+        g.setColor(Colors.FLOOR_GRID);
+        for (int x = 0; x <= EngineArena.ARENA_W; x += 32) {
+            g.drawLine(x, 0, x, EngineArena.ARENA_H);
+        }
+        for (int y = 0; y <= EngineArena.ARENA_H; y += 32) {
+            g.drawLine(0, y, EngineArena.ARENA_W, y);
+        }
+
+        for (Enemy enemy : enemies) enemy.render(g);
+        for (Particle particle : particles) particle.render(g);
+        for (Bullet bullet : bullets) bullet.render(g);
+        player.render(g);
+    }
+
+    private void ensureCanvasSize() {
+        int w = Math.max(1, canvas.getWidth());
+        int h = Math.max(1, canvas.getHeight());
+        if (w == lastCanvasW && h == lastCanvasH) {
+            return;
+        }
+        lastCanvasW = w;
+        lastCanvasH = h;
+        arenaViewport.resizeToCanvas(w, h);
+        shop.setCanvasSize(w, h);
+        Rectangle viewport = arenaViewport.getViewportRect();
+        int bw = 240;
+        int bh = 52;
+        int bx = viewport.x + (viewport.width - bw) / 2;
+        int by = viewport.y + viewport.height / 2 + 60;
+        restartButton = new Rectangle(bx, by, bw, bh);
     }
 
     private void restartGame() {
@@ -176,52 +248,9 @@ public class Engine implements Runnable {
         player.hp = player.maxHp;
         player.xp = 0;
         player.gold = 0;
-        player.pos.set(WIDTH/2.0, HEIGHT/2.0);
+        player.pos.set(worldBounds.w / 2.0, worldBounds.h / 2.0);
 
-        // Wave 1 Schwierigkeitsparameter aktivieren
         spawner.onWaveStart(waves.getWave());
-
         state = GameState.RUNNING;
-    }
-
-    private void render(Graphics2D g) {
-        g.setColor(new Color(18,20,26));
-        g.fillRect(0,0,WIDTH,HEIGHT);
-
-        drawGrid(g);
-
-        g.setColor(new Color(60,66,80));
-        g.drawRect(arena.x, arena.y, arena.w-1, arena.h-1);
-
-        for (Enemy e: enemies) e.render(g);
-        for (Particle p: particles) p.render(g);
-        for (Bullet b: bullets) b.render(g);
-        player.render(g);
-
-        if (state == GameState.RUNNING) {
-            String t = String.format("Wave %d — %02d:%02d", waves.getWave(), (int)(waves.getTimeLeft()/60), (int)(waves.getTimeLeft()%60));
-            HUD.drawTopBanner(g, t);
-        } else if (state == GameState.SHOP) {
-            HUD.drawTopBanner(g, "Shop – Wave " + waves.getWave() + " beendet");
-        }
-
-        HUD.drawBars(g, player);
-        HUD.drawCrosshair(g, input.mouseX, input.mouseY);
-        if (showDebug) HUD.drawDebug(g, fps, ups, bullets.size(), particles.size(), player);
-
-        if (state == GameState.GAME_OVER) {
-            HUD.drawGameOverOverlay(g, restartButton);
-        }
-        if (state == GameState.SHOP) {
-            shop.render(g, player, waves.getWave());
-        }
-    }
-
-    private void drawGrid(Graphics2D g) {
-        g.setStroke(new BasicStroke(1f));
-        g.setColor(new Color(32,36,45));
-        int step=32;
-        for (int x=0;x<WIDTH;x+=step) g.drawLine(x,0,x,HEIGHT);
-        for (int y=0;y<HEIGHT;y+=step) g.drawLine(0,y,WIDTH,y);
     }
 }
