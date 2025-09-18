@@ -8,6 +8,8 @@ public class Input implements KeyListener, MouseListener, MouseMotionListener {
     private final boolean[] released = new boolean[256];
 
     public int mouseX=0, mouseY=0;
+    public int mouseCanvasX=0, mouseCanvasY=0;
+    public double mouseWorldX=0.0, mouseWorldY=0.0;
     public boolean mousePressedL=false, mousePressedR=false;
 
     public java.util.function.IntConsumer onKeyPressed = null;
@@ -40,5 +42,15 @@ public class Input implements KeyListener, MouseListener, MouseMotionListener {
     @Override public void mouseEntered(MouseEvent e) { }
     @Override public void mouseExited(MouseEvent e) { }
     @Override public void mouseDragged(MouseEvent e){ mouseMoved(e); }
-    @Override public void mouseMoved(MouseEvent e){ mouseX=e.getX(); mouseY=e.getY(); }
+    @Override public void mouseMoved(MouseEvent e){
+        mouseCanvasX = e.getX();
+        mouseCanvasY = e.getY();
+        mouseX = mouseCanvasX;
+        mouseY = mouseCanvasY;
+    }
+
+    public void setMouseWorld(double worldX, double worldY) {
+        this.mouseWorldX = worldX;
+        this.mouseWorldY = worldY;
+    }
 }

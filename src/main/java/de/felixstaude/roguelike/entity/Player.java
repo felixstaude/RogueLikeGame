@@ -37,7 +37,7 @@ public class Player {
 
     private double hitFlash = 0.0;
 
-    public void update(double dt, Vec2 moveDir, int mouseX, int mouseY,
+    public void update(double dt, Vec2 moveDir, double mouseX, double mouseY,
                        List<Bullet> bullets, List<Particle> particles){
         vel.x = moveDir.x * speed; vel.y = moveDir.y * speed;
         if (moveDir.x==0) vel.x *= Math.max(0, 1 - dt*friction);
