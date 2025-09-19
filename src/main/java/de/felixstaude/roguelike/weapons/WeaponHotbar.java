@@ -56,5 +56,12 @@ public class WeaponHotbar {
         return -1;
     }
 
+    public WeaponInstance remove(int index) {
+        if (index < 0 || index >= slots.size()) {
+            return null;
+        }
+        return slots.remove(index);
+    }
+
     public record Result(boolean success, WeaponInstance finalWeapon, boolean added, boolean combined) {}
 }
