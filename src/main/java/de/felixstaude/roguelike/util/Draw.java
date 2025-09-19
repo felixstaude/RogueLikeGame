@@ -14,15 +14,16 @@ import java.awt.image.BufferedImage;
  * Drawing helpers for rounded shapes, centered text and shared render hints.
  */
 public final class Draw {
-    private Draw() {
-    }
+    private Draw() {}
 
+    /** High-quality render hints for shapes & text. */
     public static void globalHints(Graphics2D g) {
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-        g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,       RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING,  RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+        g.setRenderingHint(RenderingHints.KEY_RENDERING,           RenderingHints.VALUE_RENDER_QUALITY);
     }
 
+    /** Back-compat alias used by older code paths. */
     public static void applyQualityHints(Graphics2D g) {
         globalHints(g);
     }
@@ -82,9 +83,7 @@ public final class Draw {
     }
 
     public static void drawCenteredString(Graphics2D g, String text, Rectangle r) {
-        if (text == null || text.isEmpty()) {
-            return;
-        }
+        if (text == null || text.isEmpty()) return;
         int w = g.getFontMetrics().stringWidth(text);
         int ascent = g.getFontMetrics().getAscent();
         int descent = g.getFontMetrics().getDescent();
@@ -99,11 +98,11 @@ public final class Draw {
         g.drawString(text, x, baselineY);
     }
 
+    /** Draws an image clipped to a rounded rect with optional border. */
     public static void drawIcon(Graphics2D g, BufferedImage image, Rectangle area, int arc, Color border) {
-        if (image == null || area.width <= 0 || area.height <= 0) {
-            return;
-        }
-        Object oldHint = g.getRenderingHint(RenderingHints.KEY_INTERPOLATION);
+        if (image == null || area.width <= 0 || area.height <= 0) return;
+
+        Object oldInterp = g.getRenderingHint(RenderingHints.KEY_INTERPOLATION);
         g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
 
         Shape oldClip = g.getClip();
@@ -113,17 +112,17 @@ public final class Draw {
         g.setClip(oldClip);
 
         if (border != null) {
-            Color old = g.getColor();
+            Color oldCol = g.getColor();
             Stroke oldStroke = g.getStroke();
             g.setColor(border);
             g.setStroke(new BasicStroke(1.2f));
             g.draw(clip);
             g.setStroke(oldStroke);
-            g.setColor(old);
+            g.setColor(oldCol);
         }
 
-        if (oldHint != null) {
-            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, oldHint);
+        if (oldInterp != null) {
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, oldInterp);
         }
     }
 }

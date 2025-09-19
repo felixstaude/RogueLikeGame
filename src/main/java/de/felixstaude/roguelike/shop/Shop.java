@@ -40,7 +40,7 @@ import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
- * Shop UI with single-row layout, lock persistence and stat preview.
+ * Shop UI mit Single-Row Layout, Lock-Persistenz (eine Rotation) und Stat-Preview.
  */
 public class Shop {
 
@@ -53,10 +53,10 @@ public class Shop {
         public final ItemRarity rarity;
         public final int price;
         public final List<Mod> mods;
-        public final Item item;
-        public final WeaponDef weaponDef;
-        public final WeaponTier tier;
-        public final String iconPath;
+        public final Item item;                  // wenn PASSIVE
+        public final WeaponDef weaponDef;        // wenn WEAPON
+        public final WeaponTier tier;            // wenn WEAPON
+        public final String iconPath;            // optional, sonst aus id/type abgeleitet
 
         private Offer(String offerId, OfferType type, String title, ItemRarity rarity, int price, List<Mod> mods,
                       Item item, WeaponDef weaponDef, WeaponTier tier, String iconPath) {
@@ -116,32 +116,43 @@ public class Shop {
         }
     }
 
+    // --- Layout-Konstanten ---
     private static final int PANEL_PADDING = 24;
     private static final int PANEL_ARC = 24;
     private static final int TOPBAR_HEIGHT = 56;
+
     private static final int CARD_WIDTH = 280;
     private static final int CARD_HEIGHT = 180;
     private static final int CARD_GAP = 24;
     private static final int CARD_ICON_SIZE = 80;
     private static final int CARD_ICON_RADIUS = 8;
+
     private static final int PRICE_WIDTH = 86;
     private static final int PRICE_HEIGHT = 28;
     private static final int BUY_WIDTH = 96;
     private static final int BUY_HEIGHT = 28;
     private static final int LOCK_SIZE = 28;
+
     private static final int HOTBAR_HEIGHT = 96;
     private static final int HOTBAR_SLOT_WIDTH = 240;
     private static final int HOTBAR_SLOT_HEIGHT = 58;
     private static final int HOTBAR_GAP = 14;
     private static final int SELL_WIDTH = 60;
     private static final int SELL_HEIGHT = 32;
+
     private static final String LOCK_TOOLTIP = "Lock für nächste Rotation";
 
+    // --- Datenquellen / Pools ---
     private final List<Item> passivePool = PassiveItemCatalog.all();
     private final Map<WeaponType, WeaponDef> weapons = new HashMap<>(WeaponCatalog.all());
+
+    // --- Run- / Shop-States ---
     private final Set<String> boughtUniques = new HashSet<>();
     private final Set<String> lockedOfferIds = new HashSet<>();
     private final List<Offer> carryLockedNextShop = new ArrayList<>();
+
+    private int shopRerollDiscount = 0;
+    private int shopPriceDiscountPct = 0;
 
     private final List<Offer> offers = new ArrayList<>();
     private final List<CardUI> cardUIs = new ArrayList<>();
@@ -152,6 +163,7 @@ public class Shop {
 
     private EffectiveStats.Base baseStats = new EffectiveStats.Base();
 
+    // --- Layout-Rechtecke ---
     private Rectangle panelRect = new Rectangle();
     private Rectangle topbarRect = new Rectangle();
     private Rectangle statsRect = new Rectangle();
@@ -161,22 +173,30 @@ public class Shop {
     private Rectangle nextBtn = new Rectangle();
     private Rectangle messageRect = new Rectangle();
 
+    // --- Canvas/Pointer ---
     private int canvasW = 1280;
     private int canvasH = 720;
     private int pointerX = 0;
     private int pointerY = 0;
+
+    // --- Hover/Focus ---
     private int hoverCardIndex = -1;
     private int keyboardFocusIndex = -1;
 
+    // --- Flags ---
     private boolean layoutDirty = true;
 
+    // --- ökonomische Regeln ---
     private int rerollCost = 6;
     private int rerollsThisPhase = 0;
-    private int shopRerollDiscount = 0;
-    private int shopPriceDiscountPct = 0;
 
+    // --- UI Messages ---
     private String lastMessage = "";
     private Color messageColor = Colors.TEXT_SECONDARY;
+
+    // ====================================================================== //
+    //                             PUBLIC API                                 //
+    // ====================================================================== //
 
     public void setCanvasSize(int width, int height) {
         if (width != this.canvasW || height != this.canvasH) {
@@ -189,41 +209,44 @@ public class Shop {
     public void updatePointer(int x, int y) {
         this.pointerX = x;
         this.pointerY = y;
-        if (!layoutDirty) {
-            refreshHover();
-        }
+        if (!layoutDirty) refreshHover();
     }
 
+    /** Shop-Phase starten / neu befüllen (nach einer Wave). */
     public void prepareForWave(int wave, Player player) {
         updateBaseFromPlayer(player);
         rerollCost = Math.max(2, 6 - shopRerollDiscount);
         rerollsThisPhase = 0;
-        lockedOfferIds.clear();
+
+        // Locks aus vorherigem Shop einmalig übernehmen
         List<OfferSlot> preserved = new ArrayList<>();
         for (int i = 0; i < carryLockedNextShop.size(); i++) {
             preserved.add(new OfferSlot(i, carryLockedNextShop.get(i)));
         }
         carryLockedNextShop.clear();
         rebuildOffers(0, 0, preserved);
+
         lastMessage = "";
         messageColor = Colors.TEXT_SECONDARY;
         markLayoutDirty();
     }
 
+    /** Input im Shop behandeln. true = Start nächste Wave. */
     public boolean handleInput(Input input, Player player) {
         ensureLayout();
         sanitizeFocus();
 
         if (input.mousePressedL) {
-            if (trySellWeapon(input, player)) {
-                return false;
-            }
-            if (handleLockClick(input)) {
-                return false;
-            }
-            if (handleBuyClick(input, player)) {
-                return false;
-            }
+            // SELL in Hotbar?
+            if (trySellWeapon(input, player)) return false;
+
+            // Lock-Button auf Karten?
+            if (handleLockClick(input)) return false;
+
+            // BUY-Button auf Karten?
+            if (handleBuyClick(input, player)) return false;
+
+            // Reroll?
             if (rerollBtn.contains(input.mouseX, input.mouseY)) {
                 int cost = getRerollCost();
                 if (player.gold >= cost) {
@@ -237,12 +260,15 @@ public class Shop {
                 }
                 return false;
             }
+
+            // Next Wave?
             if (nextBtn.contains(input.mouseX, input.mouseY)) {
                 stashLockedForNextShop();
                 return true;
             }
         }
 
+        // Shortcuts: 1..6 = Buy
         for (int i = 0; i < offers.size() && i < 6; i++) {
             if (input.wasPressed(KeyEvent.VK_1 + i)) {
                 keyboardFocusIndex = i;
@@ -251,6 +277,7 @@ public class Shop {
             }
         }
 
+        // R = Reroll
         if (input.wasPressed(KeyEvent.VK_R)) {
             int cost = getRerollCost();
             if (player.gold >= cost) {
@@ -265,46 +292,49 @@ public class Shop {
             return false;
         }
 
+        // SPACE = Start next wave
         if (input.wasPressed(KeyEvent.VK_SPACE)) {
             stashLockedForNextShop();
             return true;
         }
 
+        // L = Lock/Unlock fokussierte Karte
         if (input.wasPressed(KeyEvent.VK_L)) {
             int focus = currentFocusIndex();
-            if (focus >= 0) {
-                toggleLock(focus);
-            }
+            if (focus >= 0) toggleLock(focus);
         }
 
         return false;
     }
 
+    /** Shop zeichnen. */
     public void render(Graphics2D g, Player player, int wave) {
         ensureLayout();
 
+        // Stat-Snapshots: Basis & ggf. Preview (Hover/Focus)
         StatsSnapshot baseSnapshot = computeSnapshot(passiveStats, hotbar.getSlots());
         int previewIndex = previewCardIndex();
         StatsSnapshot previewSnapshot = previewIndex >= 0
                 ? computeSnapshotForOffer(offers.get(previewIndex))
                 : baseSnapshot;
 
+        // Dimmer
         g.setColor(new Color(0, 0, 0, 200));
         g.fillRect(0, 0, canvasW, canvasH);
         Draw.globalHints(g);
 
+        // Panel
         Draw.drawShadowedPanel(g, panelRect, PANEL_ARC, Colors.PANEL_SHADOW, 0, 10, Colors.PANEL_BG, Colors.PANEL_BORDER);
 
         drawTopBar(g, player, wave);
         drawStatsPanel(g, baseSnapshot, previewSnapshot, previewIndex >= 0);
-        Point lockTooltip = drawCards(g, player, previewIndex);
+        Point tooltip = drawCards(g, player, previewIndex);
         drawHotbar(g);
         drawMessage(g);
-        if (lockTooltip != null) {
-            drawLockTooltip(g, lockTooltip);
-        }
+        if (tooltip != null) drawLockTooltip(g, tooltip);
     }
 
+    // Reset für neuen Run
     public void resetRun() {
         boughtUniques.clear();
         shopRerollDiscount = 0;
@@ -321,13 +351,8 @@ public class Shop {
         markLayoutDirty();
     }
 
-    public List<Offer> getOffers() {
-        return offers;
-    }
-
-    public int getRerollCost() {
-        return rerollCost;
-    }
+    public List<Offer> getOffers() { return offers; }
+    public int getRerollCost() { return rerollCost; }
 
     public void rollOffers(int luck, int harvesting) {
         rerollCost = Math.max(2, 6 - shopRerollDiscount);
@@ -339,6 +364,8 @@ public class Shop {
     public void reroll(int luck, int harvesting) {
         rerollsThisPhase++;
         rerollCost += 4;
+
+        // gelockte Offers erhalten
         List<OfferSlot> preserved = new ArrayList<>();
         for (int i = 0; i < offers.size(); i++) {
             Offer offer = offers.get(i);
@@ -365,15 +392,12 @@ public class Shop {
                     yield new PurchaseResult(false, 0, "Unique bereits gekauft.");
                 }
                 item.applyTo(passiveStats);
-                if (item.unique) {
-                    boughtUniques.add(item.id);
-                }
-                if ("u_lucky_charm".equals(item.id)) {
-                    shopRerollDiscount = 2;
-                }
-                if ("bargain_hunter".equals(item.id)) {
-                    shopPriceDiscountPct = Math.min(50, shopPriceDiscountPct + 15);
-                }
+                if (item.unique) boughtUniques.add(item.id);
+
+                // Shop-affine Items
+                if ("u_lucky_charm".equals(item.id)) shopRerollDiscount = 2;
+                if ("bargain_hunter".equals(item.id)) shopPriceDiscountPct = Math.min(50, shopPriceDiscountPct + 15);
+
                 yield new PurchaseResult(true, price, "Gekauft: " + item.name);
             }
             case WEAPON -> {
@@ -386,6 +410,10 @@ public class Shop {
             }
         };
     }
+
+    // ====================================================================== //
+    //                              RENDERING                                 //
+    // ====================================================================== //
 
     private void drawTopBar(Graphics2D g, Player player, int wave) {
         g.setFont(Fonts.bold(30));
@@ -405,6 +433,7 @@ public class Shop {
         Color nextColor = nextHover ? Colors.SUCCESS_HOVER : Colors.SUCCESS;
         Draw.drawButton(g, nextBtn, "Start Next Wave", nextColor, Colors.TEXT_PRIMARY);
 
+        // Info mittig zwischen Buttons
         int infoStart = rerollBtn.x + rerollBtn.width + 16;
         int infoEnd = nextBtn.x - 16;
         if (infoEnd > infoStart) {
@@ -452,9 +481,7 @@ public class Shop {
             g.drawString(valueText, valueX, baseline);
 
             baseline += rowHeight;
-            if (baseline > statsRect.y + statsRect.height - 4) {
-                break;
-            }
+            if (baseline > statsRect.y + statsRect.height - 4) break;
         }
     }
 
@@ -478,15 +505,11 @@ public class Shop {
         g.setFont(Fonts.bold(16));
         g.setColor(Colors.TEXT_PRIMARY);
         g.drawString("Weapons", hotbarRect.x + 18, hotbarRect.y + 26);
-        for (HotbarSlotUI slot : hotbarUIs) {
-            drawHotbarSlot(g, slot);
-        }
+        for (HotbarSlotUI slot : hotbarUIs) drawHotbarSlot(g, slot);
     }
 
     private void drawMessage(Graphics2D g) {
-        if (lastMessage == null || lastMessage.isEmpty()) {
-            return;
-        }
+        if (lastMessage == null || lastMessage.isEmpty()) return;
         g.setFont(Fonts.regular(14));
         g.setColor(messageColor);
         Draw.drawCenteredString(g, lastMessage, messageRect);
@@ -508,23 +531,29 @@ public class Shop {
         Color border = locked ? Colors.ACCENT : Colors.PANEL_BORDER;
         Draw.drawPanel(g, ui.bounds, 18, background, border);
 
+        // Icon
         BufferedImage icon = ImageCache.get(offer.iconPath);
         Draw.drawIcon(g, icon, ui.icon, CARD_ICON_RADIUS, Colors.PANEL_BORDER);
 
+        // Rarity
         g.setFont(Fonts.bold(12));
         Draw.drawBadge(g, ui.rarityBadge, offer.rarity.name(), Colors.rarity(offer.rarity), Colors.BADGE_TEXT);
 
+        // Unique-Hinweis
         if (offer.type == OfferType.PASSIVE && offer.item.unique) {
             Rectangle unique = new Rectangle(ui.bounds.x + 16, ui.rarityBadge.y + ui.rarityBadge.height + 4, 70, 18);
             Draw.drawBadge(g, unique, "UNIQUE", new Color(0x4B566F), Colors.TEXT_PRIMARY);
         }
 
         boolean soldOut = offer.type == OfferType.PASSIVE && offer.item.unique && boughtUniques.contains(offer.item.id);
+
+        // Titel
         g.setFont(Fonts.bold(18));
         g.setColor(soldOut ? Colors.TEXT_MUTED : Colors.TEXT_PRIMARY);
         int titleY = ui.icon.y + ui.icon.height + 28;
         g.drawString(offer.title, ui.bounds.x + 16, titleY);
 
+        // Mod-Liste
         List<ModLine> mods = describeMods(offer.mods);
         g.setFont(Fonts.regular(14));
         int textY = titleY + 22;
@@ -536,21 +565,25 @@ public class Shop {
             textY += 18;
         }
 
+        // Preis
         int price = applyDiscounts(offer.price);
         boolean canAfford = player.gold >= price;
         g.setFont(Fonts.bold(14));
         Color priceColor = soldOut ? Colors.DISABLED : (canAfford ? Colors.SUCCESS : Colors.DANGER);
         Draw.drawPill(g, ui.price, price + "G", priceColor, Colors.TEXT_PRIMARY);
 
+        // BUY
         boolean buyHover = ui.buy.contains(pointerX, pointerY);
         Color buyColor = soldOut ? Colors.DISABLED
                 : (canAfford ? (buyHover ? Colors.ACCENT_HOVER : Colors.ACCENT) : Colors.DISABLED);
         Draw.drawButton(g, ui.buy, soldOut ? "SOLD" : "BUY", buyColor, Colors.TEXT_PRIMARY);
 
+        // Tastaturhinweis
         g.setFont(Fonts.regular(12));
         g.setColor(Colors.TEXT_MUTED);
         g.drawString("[" + (index + 1) + "]", ui.buy.x + ui.buy.width + 6, ui.buy.y + ui.buy.height - 6);
 
+        // Lock-Schalter
         drawLockToggle(g, ui.lockToggle, locked, lockHover);
     }
 
@@ -560,6 +593,7 @@ public class Shop {
             g.setFont(Fonts.bold(14));
             g.setColor(Colors.TEXT_PRIMARY);
             g.drawString(slot.weapon.displayName(), slot.bounds.x + 14, slot.bounds.y + 22);
+
             g.setFont(Fonts.regular(12));
             g.setColor(Colors.TEXT_SECONDARY);
             g.drawString(compactMods(slot.weapon.mods()), slot.bounds.x + 14, slot.bounds.y + 40);
@@ -577,9 +611,8 @@ public class Shop {
 
     private void drawLockToggle(Graphics2D g, Rectangle area, boolean locked, boolean hover) {
         Color base = locked ? Colors.ACCENT : Colors.TEXT_SECONDARY;
-        if (hover) {
-            base = locked ? Colors.ACCENT_HOVER : Colors.TEXT_PRIMARY;
-        }
+        if (hover) base = locked ? Colors.ACCENT_HOVER : Colors.TEXT_PRIMARY;
+
         int circleDiameter = Math.max(8, area.width - 8);
         int circleX = area.x + (area.width - circleDiameter) / 2;
         int circleY = area.y + 2;
@@ -603,10 +636,12 @@ public class Shop {
         g.fill(pin);
     }
 
+    // ====================================================================== //
+    //                               LAYOUT                                   //
+    // ====================================================================== //
+
     private void ensureLayout() {
-        if (!layoutDirty) {
-            return;
-        }
+        if (!layoutDirty) return;
         layoutDirty = false;
         cardUIs.clear();
         hotbarUIs.clear();
@@ -629,12 +664,13 @@ public class Shop {
         int hotbarTop = panelRect.y + panelRect.height - PANEL_PADDING - HOTBAR_HEIGHT;
         int statsHeight = Math.max(CARD_HEIGHT, hotbarTop - mainTop - 24);
 
+        // Stats links, Karten rechts daneben in EINER Reihe
         statsRect = new Rectangle(contentX, mainTop, 280, statsHeight);
         int cardsX = statsRect.x + statsRect.width + CARD_GAP;
         int cardsWidth = Math.max(CARD_WIDTH, contentX + contentWidth - cardsX);
         cardsRect = new Rectangle(cardsX, mainTop, cardsWidth, CARD_HEIGHT);
 
-        List<Rectangle> cardBounds = Layout.oneRowCardBounds(offers.size(), CARD_WIDTH, CARD_GAP, cardsRect);
+        List<Rectangle> cardBounds = oneRowCardBounds(offers.size(), CARD_WIDTH, CARD_GAP, cardsRect);
         for (int i = 0; i < cardBounds.size(); i++) {
             Rectangle bounds = cardBounds.get(i);
             CardUI ui = new CardUI();
@@ -650,6 +686,7 @@ public class Shop {
             cardUIs.add(ui);
         }
 
+        // Hotbar unten
         hotbarRect = new Rectangle(contentX, hotbarTop, contentWidth, HOTBAR_HEIGHT);
         int slotCount = hotbar.capacity();
         int totalSlotWidth = slotCount * HOTBAR_SLOT_WIDTH + (slotCount - 1) * HOTBAR_GAP;
@@ -674,6 +711,21 @@ public class Shop {
         sanitizeFocus();
     }
 
+    /** simple eigene Variante einer „oneRowCardBounds“ Berechnung */
+    private List<Rectangle> oneRowCardBounds(int count, int cardW, int gap, Rectangle area) {
+        int n = Math.max(0, Math.min(count, 6));
+        List<Rectangle> out = new ArrayList<>(n);
+        if (n == 0) return out;
+        int totalW = n * cardW + (n - 1) * gap;
+        int startX = area.x + Math.max(0, (area.width - totalW) / 2);
+        int y = area.y;
+        for (int i = 0; i < n; i++) {
+            int x = startX + i * (cardW + gap);
+            out.add(new Rectangle(x, y, cardW, CARD_HEIGHT));
+        }
+        return out;
+    }
+
     private void refreshHover() {
         hoverCardIndex = -1;
         for (int i = 0; i < cardUIs.size() && i < offers.size(); i++) {
@@ -686,24 +738,14 @@ public class Shop {
 
     private void sanitizeFocus() {
         int size = offers.size();
-        if (hoverCardIndex >= size) {
-            hoverCardIndex = -1;
-        }
-        if (keyboardFocusIndex >= size) {
-            keyboardFocusIndex = size - 1;
-        }
-        if (keyboardFocusIndex < 0 || size == 0) {
-            keyboardFocusIndex = -1;
-        }
+        if (hoverCardIndex >= size) hoverCardIndex = -1;
+        if (keyboardFocusIndex >= size) keyboardFocusIndex = size - 1;
+        if (keyboardFocusIndex < 0 || size == 0) keyboardFocusIndex = -1;
     }
 
     private int previewCardIndex() {
-        if (hoverCardIndex >= 0 && hoverCardIndex < offers.size()) {
-            return hoverCardIndex;
-        }
-        if (keyboardFocusIndex >= 0 && keyboardFocusIndex < offers.size()) {
-            return keyboardFocusIndex;
-        }
+        if (hoverCardIndex >= 0 && hoverCardIndex < offers.size()) return hoverCardIndex;
+        if (keyboardFocusIndex >= 0 && keyboardFocusIndex < offers.size()) return keyboardFocusIndex;
         return -1;
     }
 
@@ -734,9 +776,7 @@ public class Shop {
     }
 
     private void attemptPurchase(int index, Player player) {
-        if (index < 0 || index >= offers.size()) {
-            return;
-        }
+        if (index < 0 || index >= offers.size()) return;
         Offer offer = offers.get(index);
         PurchaseResult result = buy(index, passiveStats, hotbar, player.gold);
         if (result.success) {
@@ -754,9 +794,7 @@ public class Shop {
     }
 
     private void toggleLock(int index) {
-        if (index < 0 || index >= offers.size()) {
-            return;
-        }
+        if (index < 0 || index >= offers.size()) return;
         Offer offer = offers.get(index);
         if (lockedOfferIds.remove(offer.offerId)) {
             lastMessage = "Unlock: " + offer.title;
@@ -774,18 +812,14 @@ public class Shop {
         }
         carryLockedNextShop.clear();
         for (Offer offer : offers) {
-            if (lockedOfferIds.contains(offer.offerId)) {
-                carryLockedNextShop.add(offer);
-            }
+            if (lockedOfferIds.contains(offer.offerId)) carryLockedNextShop.add(offer);
         }
         lockedOfferIds.clear();
     }
 
     private boolean trySellWeapon(Input input, Player player) {
         for (HotbarSlotUI slot : hotbarUIs) {
-            if (slot.weapon == null) {
-                continue;
-            }
+            if (slot.weapon == null) continue;
             if (slot.sellButton.contains(input.mouseX, input.mouseY)) {
                 WeaponInstance removed = hotbar.remove(slot.index);
                 if (removed != null) {
@@ -805,34 +839,33 @@ public class Shop {
         return Math.max(1, (int) Math.round(weapon.price() * 0.5));
     }
 
-    private void markLayoutDirty() {
-        layoutDirty = true;
-    }
+    private void markLayoutDirty() { layoutDirty = true; }
+
+    // ====================================================================== //
+    //                           OFFER GENERATION                             //
+    // ====================================================================== //
 
     private void rebuildOffers(int luck, int harvesting, List<OfferSlot> preserved) {
         int slots = computeSlots(harvesting);
         Offer[] newOffers = new Offer[slots];
+
+        // gelockte an ursprünglichen/naheliegenden Index legen
         for (OfferSlot slot : preserved) {
             int idx = Math.max(0, Math.min(slots - 1, slot.index()));
-            while (idx < slots && newOffers[idx] != null) {
-                idx++;
-            }
-            if (idx >= slots) {
-                break;
-            }
+            while (idx < slots && newOffers[idx] != null) idx++;
+            if (idx >= slots) break;
             newOffers[idx] = slot.offer();
         }
+
+        // rest auffüllen
         for (int i = 0; i < slots; i++) {
-            if (newOffers[i] == null) {
-                newOffers[i] = randomOffer(luck);
-            }
+            if (newOffers[i] == null) newOffers[i] = randomOffer(luck);
         }
+
         offers.clear();
-        for (Offer offer : newOffers) {
-            if (offer != null) {
-                offers.add(offer);
-            }
-        }
+        for (Offer offer : newOffers) if (offer != null) offers.add(offer);
+
+        // Locks säubern (nur ids, die noch existieren)
         lockedOfferIds.retainAll(currentOfferIds());
         markLayoutDirty();
         sanitizeFocus();
@@ -840,9 +873,7 @@ public class Shop {
 
     private Set<String> currentOfferIds() {
         Set<String> ids = new HashSet<>();
-        for (Offer offer : offers) {
-            ids.add(offer.offerId);
-        }
+        for (Offer offer : offers) ids.add(offer.offerId);
         return ids;
     }
 
@@ -860,9 +891,7 @@ public class Shop {
     private Item randomPassiveItem(int luck) {
         List<Item> candidates = new ArrayList<>();
         for (Item item : passivePool) {
-            if (item.unique && boughtUniques.contains(item.id)) {
-                continue;
-            }
+            if (item.unique && boughtUniques.contains(item.id)) continue;
             candidates.add(item);
         }
         List<Item> pool = candidates.isEmpty() ? passivePool : candidates;
@@ -877,15 +906,12 @@ public class Shop {
             WeaponDef def = pool.get(i);
             double mult = 1.0 + Math.max(0, luck) * 0.008 * def.rarityHint.rank();
             int weight = (int) Math.max(1, Math.round(def.rarityHint.weight * mult));
-            weights[i] = weight;
-            total += weight;
+            weights[i] = weight; total += weight;
         }
         int pick = ThreadLocalRandom.current().nextInt(Math.max(1, total));
         for (int i = 0; i < pool.size(); i++) {
             pick -= weights[i];
-            if (pick < 0) {
-                return pool.get(i);
-            }
+            if (pick < 0) return pool.get(i);
         }
         return pool.get(0);
     }
@@ -921,6 +947,10 @@ public class Shop {
         return Math.max(1, discounted);
     }
 
+    // ====================================================================== //
+    //                         STATS / PREVIEW-LOGIK                          //
+    // ====================================================================== //
+
     private void updateBaseFromPlayer(Player player) {
         EffectiveStats.Base base = new EffectiveStats.Base();
         base.baseMaxHp = (int) Math.round(player.maxHp);
@@ -941,9 +971,7 @@ public class Shop {
     private StatsSnapshot computeSnapshot(Stats passives, List<WeaponInstance> weapons) {
         Stats total = new Stats(passives);
         for (WeaponInstance weapon : weapons) {
-            for (Mod mod : weapon.mods()) {
-                total.add(mod.stat(), mod.amount());
-            }
+            for (Mod mod : weapon.mods()) total.add(mod.stat(), mod.amount());
         }
         EffectiveStats effective = EffectiveStats.from(baseStats, total);
         return new StatsSnapshot(total, effective);
@@ -981,9 +1009,7 @@ public class Shop {
             if (idx >= 0) {
                 slots.remove(idx);
                 candidate = new WeaponInstance(candidate.def, candidate.tier.next());
-                if (candidate.tier == WeaponTier.EPIC) {
-                    break;
-                }
+                if (candidate.tier == WeaponTier.EPIC) break;
                 continue;
             }
             break;
@@ -997,9 +1023,7 @@ public class Shop {
 
     private int indexOfSameTypeAndTier(List<WeaponInstance> slots, WeaponInstance weapon) {
         for (int i = 0; i < slots.size(); i++) {
-            if (slots.get(i).sameTypeAndTier(weapon)) {
-                return i;
-            }
+            if (slots.get(i).sameTypeAndTier(weapon)) return i;
         }
         return -1;
     }
@@ -1023,12 +1047,8 @@ public class Shop {
     }
 
     private static Color colorForAmount(int amount) {
-        if (amount > 0) {
-            return Colors.MOD_POSITIVE;
-        }
-        if (amount < 0) {
-            return Colors.MOD_NEGATIVE;
-        }
+        if (amount > 0) return Colors.MOD_POSITIVE;
+        if (amount < 0) return Colors.MOD_NEGATIVE;
         return Colors.MOD_NEUTRAL;
     }
 
@@ -1046,9 +1066,7 @@ public class Shop {
                 piece = String.format(Locale.ROOT, "%+d %s", amount, shortName(mod.stat()));
             }
             sb.append(piece);
-            if (i < mods.size() - 1) {
-                sb.append("  ");
-            }
+            if (i < mods.size() - 1) sb.append("  ");
         }
         return sb.toString();
     }
@@ -1156,14 +1174,14 @@ public class Shop {
         return new StatLine(value, delta, sign);
     }
 
-    private record StatsSnapshot(Stats raw, EffectiveStats effective) {
-    }
+    // ====================================================================== //
+    //                              NESTED TYPES                               //
+    // ====================================================================== //
 
-    private record ModLine(String text, Color color) {
-    }
-
-    private record OfferSlot(int index, Offer offer) {
-    }
+    private record StatsSnapshot(Stats raw, EffectiveStats effective) {}
+    private record ModLine(String text, Color color) {}
+    private record OfferSlot(int index, Offer offer) {}
+    private record StatLine(String valueText, String deltaText, int deltaSign) {}
 
     private static final class CardUI {
         int index;
@@ -1180,9 +1198,6 @@ public class Shop {
         Rectangle bounds;
         Rectangle sellButton;
         WeaponInstance weapon;
-    }
-
-    private record StatLine(String valueText, String deltaText, int deltaSign) {
     }
 
     private enum Unit {
@@ -1207,9 +1222,7 @@ public class Shop {
         }
 
         String formatDelta(double diff) {
-            if (isZero(diff)) {
-                return "";
-            }
+            if (isZero(diff)) return "";
             return "(" + format(diff, true) + ")";
         }
 
@@ -1217,9 +1230,7 @@ public class Shop {
             return format(diff, true);
         }
 
-        String formatDeltaZero() {
-            return "-";
-        }
+        String formatDeltaZero() { return "-"; }
 
         boolean isZero(double value) {
             return Math.abs(value) < epsilon();
@@ -1233,9 +1244,7 @@ public class Shop {
             }
             double pow = Math.pow(10, decimals);
             double rounded = Math.round(value * pow) / pow;
-            if (Math.abs(rounded) < epsilon()) {
-                rounded = 0.0;
-            }
+            if (Math.abs(rounded) < epsilon()) rounded = 0.0;
             String pattern = (withSign ? "%+" : "%") + "." + decimals + "f";
             return String.format(Locale.ROOT, pattern, rounded) + suffix;
         }
@@ -1243,176 +1252,5 @@ public class Shop {
         private double epsilon() {
             return decimals == 0 ? 0.5 : 0.5 / Math.pow(10, decimals);
         }
-    }
-
-    private enum PanelStat {
-        MAX_HP("Max HP") {
-            @Override
-            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
-                return simple(Unit.INT, base.effective().maxHp, preview.effective().maxHp);
-            }
-        },
-        ARMOR("Armor %") {
-            @Override
-            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
-                return simple(Unit.SIGNED_PERCENT, armorFromMultiplier(base.effective().incomingDamageMul),
-                        armorFromMultiplier(preview.effective().incomingDamageMul));
-            }
-        },
-        DODGE("Dodge %") {
-            @Override
-            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
-                return simple(Unit.PERCENT, base.effective().dodgePct, preview.effective().dodgePct);
-            }
-        },
-        HP_REGEN("HP/s") {
-            @Override
-            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
-                return simple(Unit.FLOAT1, base.effective().hpRegenPerSec, preview.effective().hpRegenPerSec);
-            }
-        },
-        DAMAGE("Damage %") {
-            @Override
-            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
-                int baseVal = baseStats.baseDamagePct + base.raw().get(Stat.DAMAGE_PCT);
-                int previewVal = baseStats.baseDamagePct + preview.raw().get(Stat.DAMAGE_PCT);
-                return simple(Unit.SIGNED_PERCENT, baseVal, previewVal);
-            }
-        },
-        MELEE("Melee %") {
-            @Override
-            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
-                return simple(Unit.SIGNED_PERCENT, base.raw().get(Stat.MELEE_PCT), preview.raw().get(Stat.MELEE_PCT));
-            }
-        },
-        RANGED("Ranged %") {
-            @Override
-            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
-                int baseVal = baseStats.baseRangedPct + base.raw().get(Stat.RANGED_PCT);
-                int previewVal = baseStats.baseRangedPct + preview.raw().get(Stat.RANGED_PCT);
-                return simple(Unit.SIGNED_PERCENT, baseVal, previewVal);
-            }
-        },
-        MAGIC("Magic %") {
-            @Override
-            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
-                return simple(Unit.SIGNED_PERCENT, base.raw().get(Stat.MAGIC_PCT), preview.raw().get(Stat.MAGIC_PCT));
-            }
-        },
-        CRIT_CHANCE("Crit Chance %") {
-            @Override
-            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
-                return simple(Unit.PERCENT, base.effective().critChancePct, preview.effective().critChancePct);
-            }
-        },
-        CRIT_DAMAGE("Crit Damage %") {
-            @Override
-            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
-                double baseVal = (base.effective().critMultiplier - 1.0) * 100.0;
-                double previewVal = (preview.effective().critMultiplier - 1.0) * 100.0;
-                return simple(Unit.PERCENT, baseVal, previewVal);
-            }
-        },
-        ATTACK_SPEED("Attack Speed %") {
-            @Override
-            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
-                double denom = Math.max(0.001, baseStats.baseFireRate);
-                double baseVal = percentFromMultiplier(base.effective().fireRate / denom);
-                double previewVal = percentFromMultiplier(preview.effective().fireRate / denom);
-                return simple(Unit.SIGNED_PERCENT, baseVal, previewVal);
-            }
-        },
-        RANGE("Range (px)") {
-            @Override
-            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
-                return simple(Unit.INT, base.effective().rangePx, preview.effective().rangePx);
-            }
-        },
-        PROJECTILE("Projectile Speed/Size %") {
-            @Override
-            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
-                double baseSpeed = percentFromMultiplier(base.effective().projectileSpeedMul);
-                double previewSpeed = percentFromMultiplier(preview.effective().projectileSpeedMul);
-                double baseSize = percentFromMultiplier(base.effective().projectileSizeMul);
-                double previewSize = percentFromMultiplier(preview.effective().projectileSizeMul);
-                return combine(Unit.SIGNED_PERCENT, baseSpeed, previewSpeed, Unit.SIGNED_PERCENT, baseSize, previewSize);
-            }
-        },
-        MULTISHOT("Multishot") {
-            @Override
-            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
-                return simple(Unit.INT, base.effective().multishot, preview.effective().multishot);
-            }
-        },
-        PIERCE("Pierce") {
-            @Override
-            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
-                return simple(Unit.INT, base.effective().pierce, preview.effective().pierce);
-            }
-        },
-        HOMING("Homing Chance/Strength %") {
-            @Override
-            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
-                double baseChance = base.effective().homingChance01 * 100.0;
-                double previewChance = preview.effective().homingChance01 * 100.0;
-                double baseStrength = base.effective().homingStrengthMul * 100.0;
-                double previewStrength = preview.effective().homingStrengthMul * 100.0;
-                return combine(Unit.PERCENT, baseChance, previewChance, Unit.FLOAT1_PERCENT, baseStrength, previewStrength);
-            }
-        },
-        KNOCKBACK("Knockback %") {
-            @Override
-            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
-                return simple(Unit.SIGNED_PERCENT, base.raw().get(Stat.KNOCKBACK_PCT), preview.raw().get(Stat.KNOCKBACK_PCT));
-            }
-        },
-        MOVE_SPEED("Move Speed %") {
-            @Override
-            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
-                double baseVal = percentFromMultiplier(base.effective().moveSpeedMul);
-                double previewVal = percentFromMultiplier(preview.effective().moveSpeedMul);
-                return simple(Unit.SIGNED_PERCENT, baseVal, previewVal);
-            }
-        },
-        LIFESTEAL("Lifesteal %") {
-            @Override
-            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
-                double baseVal = base.effective().lifestealFrac * 100.0;
-                double previewVal = preview.effective().lifestealFrac * 100.0;
-                return simple(Unit.FLOAT1_PERCENT, baseVal, previewVal);
-            }
-        },
-        LUCK("Luck") {
-            @Override
-            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
-                return simple(Unit.INT, base.effective().luck, preview.effective().luck);
-            }
-        },
-        HARVESTING("Harvesting") {
-            @Override
-            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
-                return simple(Unit.INT, base.effective().harvesting, preview.effective().harvesting);
-            }
-        },
-        BOSS_DAMAGE("Boss Damage %") {
-            @Override
-            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
-                double baseVal = percentFromMultiplier(base.effective().bossDamageMul);
-                double previewVal = percentFromMultiplier(preview.effective().bossDamageMul);
-                return simple(Unit.SIGNED_PERCENT, baseVal, previewVal);
-            }
-        };
-
-        private final String label;
-
-        PanelStat(String label) {
-            this.label = label;
-        }
-
-        String label() {
-            return label;
-        }
-
-        abstract StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats);
     }
 }
