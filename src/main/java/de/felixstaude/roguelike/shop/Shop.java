@@ -1147,6 +1147,10 @@ public class Shop {
         return (1.0 - incomingMultiplier) * 100.0;
     }
 
+    private static int withBase(StatsSnapshot snapshot, Stat stat, int baseValue) {
+        return baseValue + snapshot.raw().get(stat);
+    }
+
     private static StatLine simple(Unit unit, double baseValue, double previewValue) {
         double diff = previewValue - baseValue;
         String delta = unit.formatDelta(diff);
@@ -1177,6 +1181,183 @@ public class Shop {
     // ====================================================================== //
     //                              NESTED TYPES                               //
     // ====================================================================== //
+
+    private enum PanelStat {
+        MAX_HP(pretty(Stat.MAX_HP)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                return simple(Unit.INT, base.effective().maxHp, preview.effective().maxHp);
+            }
+        },
+        ARMOR(pretty(Stat.ARMOR_PCT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                double baseArmor = armorFromMultiplier(base.effective().incomingDamageMul);
+                double previewArmor = armorFromMultiplier(preview.effective().incomingDamageMul);
+                return simple(Unit.SIGNED_PERCENT, baseArmor, previewArmor);
+            }
+        },
+        DODGE(pretty(Stat.DODGE_PCT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                return simple(Unit.PERCENT, base.effective().dodgePct, preview.effective().dodgePct);
+            }
+        },
+        HP_REGEN(pretty(Stat.HP_REGEN_PS)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                return simple(Unit.FLOAT1, base.effective().hpRegenPerSec, preview.effective().hpRegenPerSec);
+            }
+        },
+        DAMAGE(pretty(Stat.DAMAGE_PCT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                int baseValue = withBase(base, Stat.DAMAGE_PCT, baseStats.baseDamagePct);
+                int previewValue = withBase(preview, Stat.DAMAGE_PCT, baseStats.baseDamagePct);
+                return simple(Unit.SIGNED_PERCENT, baseValue, previewValue);
+            }
+        },
+        MELEE(pretty(Stat.MELEE_PCT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                int baseValue = withBase(base, Stat.MELEE_PCT, 0);
+                int previewValue = withBase(preview, Stat.MELEE_PCT, 0);
+                return simple(Unit.SIGNED_PERCENT, baseValue, previewValue);
+            }
+        },
+        RANGED(pretty(Stat.RANGED_PCT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                int baseValue = withBase(base, Stat.RANGED_PCT, baseStats.baseRangedPct);
+                int previewValue = withBase(preview, Stat.RANGED_PCT, baseStats.baseRangedPct);
+                return simple(Unit.SIGNED_PERCENT, baseValue, previewValue);
+            }
+        },
+        MAGIC(pretty(Stat.MAGIC_PCT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                int baseValue = withBase(base, Stat.MAGIC_PCT, 0);
+                int previewValue = withBase(preview, Stat.MAGIC_PCT, 0);
+                return simple(Unit.SIGNED_PERCENT, baseValue, previewValue);
+            }
+        },
+        CRIT_CHANCE(pretty(Stat.CRIT_CHANCE_PCT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                return simple(Unit.PERCENT, base.effective().critChancePct, preview.effective().critChancePct);
+            }
+        },
+        CRIT_DAMAGE(pretty(Stat.CRIT_DAMAGE_PCT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                double baseMultiplier = base.effective().critMultiplier * 100.0;
+                double previewMultiplier = preview.effective().critMultiplier * 100.0;
+                return simple(Unit.FLOAT1_PERCENT, baseMultiplier, previewMultiplier);
+            }
+        },
+        ATTACK_SPEED("Fire Rate (/s)") {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                return simple(Unit.FLOAT1, base.effective().fireRate, preview.effective().fireRate);
+            }
+        },
+        RANGE("Range (px)") {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                return simple(Unit.INT, base.effective().rangePx, preview.effective().rangePx);
+            }
+        },
+        PROJECTILE("Projectile (spd/size)") {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                double baseSpeed = percentFromMultiplier(base.effective().projectileSpeedMul);
+                double previewSpeed = percentFromMultiplier(preview.effective().projectileSpeedMul);
+                double baseSize = percentFromMultiplier(base.effective().projectileSizeMul);
+                double previewSize = percentFromMultiplier(preview.effective().projectileSizeMul);
+                return combine(Unit.SIGNED_PERCENT, baseSpeed, previewSpeed,
+                        Unit.SIGNED_PERCENT, baseSize, previewSize);
+            }
+        },
+        MULTISHOT(pretty(Stat.MULTISHOT_FLAT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                return simple(Unit.INT, base.effective().multishot, preview.effective().multishot);
+            }
+        },
+        PIERCE(pretty(Stat.PIERCE_FLAT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                return simple(Unit.INT, base.effective().pierce, preview.effective().pierce);
+            }
+        },
+        HOMING("Homing (chance/str)") {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                double baseChance = base.effective().homingChance01 * 100.0;
+                double previewChance = preview.effective().homingChance01 * 100.0;
+                double baseStrength = percentFromMultiplier(base.effective().homingStrengthMul);
+                double previewStrength = percentFromMultiplier(preview.effective().homingStrengthMul);
+                return combine(Unit.PERCENT, baseChance, previewChance,
+                        Unit.SIGNED_PERCENT, baseStrength, previewStrength);
+            }
+        },
+        KNOCKBACK(pretty(Stat.KNOCKBACK_PCT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                int baseValue = withBase(base, Stat.KNOCKBACK_PCT, 0);
+                int previewValue = withBase(preview, Stat.KNOCKBACK_PCT, 0);
+                return simple(Unit.SIGNED_PERCENT, baseValue, previewValue);
+            }
+        },
+        MOVE_SPEED(pretty(Stat.MOVE_SPEED_PCT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                double baseMove = percentFromMultiplier(base.effective().moveSpeedMul);
+                double previewMove = percentFromMultiplier(preview.effective().moveSpeedMul);
+                return simple(Unit.SIGNED_PERCENT, baseMove, previewMove);
+            }
+        },
+        LIFESTEAL(pretty(Stat.LIFESTEAL_PCT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                double baseValue = base.effective().lifestealFrac * 100.0;
+                double previewValue = preview.effective().lifestealFrac * 100.0;
+                return simple(Unit.FLOAT1_PERCENT, baseValue, previewValue);
+            }
+        },
+        LUCK(pretty(Stat.LUCK_FLAT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                return simple(Unit.INT, base.effective().luck, preview.effective().luck);
+            }
+        },
+        HARVESTING(pretty(Stat.HARVESTING_FLAT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                return simple(Unit.INT, base.effective().harvesting, preview.effective().harvesting);
+            }
+        },
+        BOSS_DAMAGE(pretty(Stat.BOSS_DAMAGE_PCT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                double baseValue = percentFromMultiplier(base.effective().bossDamageMul);
+                double previewValue = percentFromMultiplier(preview.effective().bossDamageMul);
+                return simple(Unit.SIGNED_PERCENT, baseValue, previewValue);
+            }
+        };
+
+        private final String label;
+
+        PanelStat(String label) {
+            this.label = label;
+        }
+
+        String label() {
+            return label;
+        }
+
+        abstract StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats);
+    }
 
     private record StatsSnapshot(Stats raw, EffectiveStats effective) {}
     private record ModLine(String text, Color color) {}
