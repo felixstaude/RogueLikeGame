@@ -23,6 +23,8 @@ import de.felixstaude.roguelike.weapons.WeaponTier;
 import de.felixstaude.roguelike.weapons.WeaponType;
 
 import java.awt.Color;
+import java.awt.FontMetrics;
+import java.awt.GradientPaint;
 import java.awt.Graphics2D;
 import java.awt.Point;
 import java.awt.Rectangle;
@@ -447,41 +449,122 @@ public class Shop {
         }
     }
 
-    private void drawStatsPanel(Graphics2D g, StatsSnapshot base, StatsSnapshot preview, boolean showDelta) {
-        Draw.drawPanel(g, statsRect, 20, new Color(0x161F30), Colors.PANEL_BORDER);
-        g.setFont(Fonts.bold(16));
+    private void drawStatsPanel(Graphics2D g, StatsSnapshot base, StatsSnapshot preview, boolean previewActive) {
+        Graphics2D g2 = (Graphics2D) g.create();
+        GradientPaint paint = new GradientPaint(statsRect.x, statsRect.y, new Color(0x1A2538),
+                statsRect.x, statsRect.y + statsRect.height, new Color(0x101723));
+        g2.setPaint(paint);
+        g2.fillRoundRect(statsRect.x, statsRect.y, statsRect.width, statsRect.height, 24, 24);
+        g2.dispose();
+
+        g.setColor(new Color(0x27354F));
+        g.drawRoundRect(statsRect.x, statsRect.y, statsRect.width, statsRect.height, 24, 24);
+
+        g.setFont(Fonts.bold(18));
         g.setColor(Colors.TEXT_PRIMARY);
-        g.drawString("Stats", statsRect.x + 14, statsRect.y + 28);
+        g.drawString("Stats", statsRect.x + 20, statsRect.y + 30);
 
-        int rowHeight = 24;
-        int baseline = statsRect.y + 52;
-        for (PanelStat stat : PanelStat.values()) {
-            StatLine line = stat.line(base, preview, baseStats);
-            String valueText = line.valueText();
-            String deltaText = showDelta ? line.deltaText() : "";
+        PanelStat[] stats = PanelStat.values();
+        int columns = 2;
+        int rowsPerColumn = (stats.length + columns - 1) / columns;
+        int headerHeight = 56;
+        int footerMargin = 12;
+        int columnGap = 12;
+        int columnWidth = (statsRect.width - 32 - (columns - 1) * columnGap) / columns;
+        int columnStartX = statsRect.x + 16;
+        int availableHeight = statsRect.height - headerHeight - footerMargin;
+        int rowHeight = Math.max(22, availableHeight / rowsPerColumn);
+        while (rowHeight * rowsPerColumn > availableHeight && rowHeight > 18) {
+            rowHeight--;
+        }
+        int usedHeight = rowHeight * rowsPerColumn;
+        int columnStartY = statsRect.y + headerHeight + Math.max(0, (availableHeight - usedHeight) / 2);
 
-            g.setFont(Fonts.regular(14));
-            g.setColor(Colors.TEXT_SECONDARY);
-            g.drawString(stat.label(), statsRect.x + 14, baseline);
+        Color[] rowBackground = { new Color(0x203147), new Color(0x1B2738) };
 
-            g.setFont(Fonts.bold(14));
-            g.setColor(Colors.TEXT_PRIMARY);
-            int valueWidth = g.getFontMetrics().stringWidth(valueText);
-            int valueX = statsRect.x + statsRect.width - 14 - valueWidth;
-            if (deltaText != null && !deltaText.isEmpty()) {
-                int deltaWidth = g.getFontMetrics().stringWidth(deltaText);
-                valueX -= deltaWidth + 8;
-                int sign = line.deltaSign();
-                Color deltaColor = sign > 0 ? Colors.MOD_POSITIVE
-                        : sign < 0 ? Colors.MOD_NEGATIVE : Colors.TEXT_SECONDARY;
-                g.setColor(deltaColor);
-                g.drawString(deltaText, statsRect.x + statsRect.width - 14 - deltaWidth, baseline);
-                g.setColor(Colors.TEXT_PRIMARY);
+        g.setFont(Fonts.regular(11));
+        g.setColor(new Color(0x8092B5));
+        String previewTitle = previewActive ? "Preview" : "Value";
+        String currentTitle = previewActive ? "Current" : "";
+        for (int col = 0; col < columns; col++) {
+            int colX = columnStartX + col * (columnWidth + columnGap);
+            int valueAreaStart = colX + (int) Math.floor(columnWidth * 0.45);
+            int valueRight = colX + columnWidth - 8;
+            if (!currentTitle.isEmpty()) {
+                g.drawString(currentTitle, valueAreaStart - g.getFontMetrics().stringWidth(currentTitle) - 6,
+                        statsRect.y + 44);
             }
-            g.drawString(valueText, valueX, baseline);
+            int previewHeaderWidth = g.getFontMetrics().stringWidth(previewTitle);
+            g.drawString(previewTitle, valueRight - previewHeaderWidth, statsRect.y + 44);
+        }
 
-            baseline += rowHeight;
-            if (baseline > statsRect.y + statsRect.height - 4) break;
+        if (columns > 1) {
+            g.setColor(new Color(0x1D2B3F));
+            int dividerX = columnStartX + columnWidth + columnGap / 2;
+            g.drawLine(dividerX, columnStartY - 8, dividerX, columnStartY + usedHeight + 6);
+        }
+
+        for (int col = 0; col < columns; col++) {
+            int colX = columnStartX + col * (columnWidth + columnGap);
+            int valueAreaStart = colX + (int) Math.floor(columnWidth * 0.45);
+            int valueRight = colX + columnWidth - 8;
+            for (int row = 0; row < rowsPerColumn; row++) {
+                int index = col * rowsPerColumn + row;
+                if (index >= stats.length) continue;
+                PanelStat stat = stats[index];
+                StatLine line = stat.line(base, preview, baseStats);
+
+                int rowY = columnStartY + row * rowHeight;
+                int baseline = rowY + rowHeight - 6;
+                Rectangle rowRect = new Rectangle(colX, rowY, columnWidth, rowHeight);
+
+                Color bg = rowBackground[(row + col) % rowBackground.length];
+                g.setColor(bg);
+                g.fillRoundRect(rowRect.x, rowRect.y, rowRect.width, rowRect.height, 10, 10);
+
+                g.setFont(Fonts.bold(11));
+                g.setColor(Colors.TEXT_SECONDARY);
+                int labelX = colX + 10;
+                int labelMaxWidth = Math.max(24, valueAreaStart - labelX - 6);
+                String label = ellipsize(g.getFontMetrics(), stat.label(), labelMaxWidth);
+                g.drawString(label, labelX, baseline);
+
+                if (previewActive) {
+                    String previewValue = line.previewText();
+                    g.setFont(Fonts.bold(12));
+                    g.setColor(Colors.TEXT_PRIMARY);
+                    int previewWidth = g.getFontMetrics().stringWidth(previewValue);
+                    int previewX = valueRight - previewWidth;
+                    g.drawString(previewValue, previewX, baseline);
+
+                    String deltaText = line.deltaText();
+                    int currentRight = previewX - 6;
+                    if (deltaText != null && !deltaText.isEmpty()) {
+                        g.setFont(Fonts.bold(11));
+                        Color deltaColor = line.deltaSign() > 0 ? Colors.MOD_POSITIVE
+                                : line.deltaSign() < 0 ? Colors.MOD_NEGATIVE : Colors.TEXT_SECONDARY;
+                        g.setColor(deltaColor);
+                        int deltaWidth = g.getFontMetrics().stringWidth(deltaText);
+                        int deltaX = previewX - 6 - deltaWidth;
+                        g.drawString(deltaText, deltaX, baseline);
+                        currentRight = deltaX - 6;
+                    }
+
+                    String baseValue = line.baseText();
+                    g.setFont(Fonts.regular(11));
+                    g.setColor(new Color(0x8EA3C5));
+                    int baseWidth = g.getFontMetrics().stringWidth(baseValue);
+                    int baseX = Math.max(valueAreaStart, currentRight - baseWidth);
+                    g.drawString(baseValue, baseX, baseline);
+                } else {
+                    String baseValue = line.baseText();
+                    g.setFont(Fonts.bold(12));
+                    g.setColor(Colors.TEXT_PRIMARY);
+                    int baseWidth = g.getFontMetrics().stringWidth(baseValue);
+                    int baseX = Math.max(valueAreaStart, valueRight - baseWidth);
+                    g.drawString(baseValue, baseX, baseline);
+                }
+            }
         }
     }
 
@@ -526,10 +609,39 @@ public class Shop {
 
     private void drawCard(Graphics2D g, CardUI ui, Offer offer, Player player, int index,
                           boolean preview, boolean locked, boolean lockHover) {
+        boolean soldOut = offer.type == OfferType.PASSIVE && offer.item != null && offer.item.unique
+                && boughtUniques.contains(offer.item.id);
         boolean hovered = ui.bounds.contains(pointerX, pointerY);
-        Color background = preview ? new Color(0x202B3F) : (hovered ? new Color(0x1B2436) : new Color(0x161F30));
-        Color border = locked ? Colors.ACCENT : Colors.PANEL_BORDER;
+        Color background = soldOut ? new Color(0x151B27)
+                : (preview ? new Color(0x212E44) : (hovered ? new Color(0x1B2436) : new Color(0x161F30)));
+        Color border;
+        if (locked) border = Colors.ACCENT;
+        else if (preview) border = Colors.ACCENT_HOVER;
+        else if (soldOut) border = Colors.DISABLED;
+        else border = Colors.PANEL_BORDER;
         Draw.drawPanel(g, ui.bounds, 18, background, border);
+
+        Color rarityAccent = Colors.rarity(offer.rarity);
+        int accentAlpha = soldOut ? 60 : (preview ? 220 : 170);
+        Color accentTop = new Color(rarityAccent.getRed(), rarityAccent.getGreen(), rarityAccent.getBlue(), accentAlpha);
+        Color accentBottom = new Color(rarityAccent.getRed(), rarityAccent.getGreen(), rarityAccent.getBlue(), soldOut ? 20 : 40);
+        Graphics2D cardG = (Graphics2D) g.create();
+        cardG.setPaint(new GradientPaint(ui.bounds.x, ui.bounds.y, accentTop,
+                ui.bounds.x, ui.bounds.y + 56, accentBottom));
+        int headerHeight = Math.min(ui.bounds.height, 56);
+        cardG.fillRoundRect(ui.bounds.x, ui.bounds.y, ui.bounds.width, headerHeight, 18, 18);
+        if (headerHeight < ui.bounds.height) {
+            cardG.fillRect(ui.bounds.x, ui.bounds.y + headerHeight - 18, ui.bounds.width, 18);
+        }
+        cardG.dispose();
+
+        if (hovered && !preview && !soldOut) {
+            Graphics2D glow = (Graphics2D) g.create();
+            glow.setPaint(new GradientPaint(ui.bounds.x, ui.bounds.y, new Color(255, 255, 255, 30),
+                    ui.bounds.x, ui.bounds.y + ui.bounds.height, new Color(255, 255, 255, 0)));
+            glow.fillRoundRect(ui.bounds.x, ui.bounds.y, ui.bounds.width, ui.bounds.height, 18, 18);
+            glow.dispose();
+        }
 
         // Icon
         BufferedImage icon = ImageCache.get(offer.iconPath);
@@ -544,8 +656,6 @@ public class Shop {
             Rectangle unique = new Rectangle(ui.bounds.x + 16, ui.rarityBadge.y + ui.rarityBadge.height + 4, 70, 18);
             Draw.drawBadge(g, unique, "UNIQUE", new Color(0x4B566F), Colors.TEXT_PRIMARY);
         }
-
-        boolean soldOut = offer.type == OfferType.PASSIVE && offer.item.unique && boughtUniques.contains(offer.item.id);
 
         // Titel
         g.setFont(Fonts.bold(18));
@@ -1052,6 +1162,19 @@ public class Shop {
         return Colors.MOD_NEUTRAL;
     }
 
+    private static String ellipsize(FontMetrics metrics, String text, int maxWidth) {
+        if (text == null) return "";
+        if (metrics.stringWidth(text) <= maxWidth) return text;
+        String ellipsis = "\u2026";
+        int ellipsisWidth = metrics.stringWidth(ellipsis);
+        int end = text.length();
+        while (end > 0 && metrics.stringWidth(text.substring(0, end)) + ellipsisWidth > maxWidth) {
+            end--;
+        }
+        if (end <= 0) return ellipsis;
+        return text.substring(0, end) + ellipsis;
+    }
+
     private static String compactMods(List<Mod> mods) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < mods.size(); i++) {
@@ -1147,11 +1270,15 @@ public class Shop {
         return (1.0 - incomingMultiplier) * 100.0;
     }
 
+    private static int withBase(StatsSnapshot snapshot, Stat stat, int baseValue) {
+        return baseValue + snapshot.raw().get(stat);
+    }
+
     private static StatLine simple(Unit unit, double baseValue, double previewValue) {
         double diff = previewValue - baseValue;
         String delta = unit.formatDelta(diff);
         int sign = unit.isZero(diff) ? 0 : (diff > 0 ? 1 : -1);
-        return new StatLine(unit.formatValue(baseValue), delta, sign);
+        return new StatLine(unit.formatValue(baseValue), unit.formatValue(previewValue), delta, sign);
     }
 
     private static StatLine simple(Unit unit, int baseValue, int previewValue) {
@@ -1161,9 +1288,10 @@ public class Shop {
     private static StatLine combine(Unit unitA, double baseA, double previewA, Unit unitB, double baseB, double previewB) {
         double diffA = previewA - baseA;
         double diffB = previewB - baseB;
-        String value = unitA.formatValue(baseA) + " / " + unitB.formatValue(baseB);
+        String baseValue = unitA.formatValue(baseA) + " / " + unitB.formatValue(baseB);
+        String previewValue = unitA.formatValue(previewA) + " / " + unitB.formatValue(previewB);
         if (unitA.isZero(diffA) && unitB.isZero(diffB)) {
-            return new StatLine(value, "", 0);
+            return new StatLine(baseValue, previewValue, "", 0);
         }
         String partA = unitA.isZero(diffA) ? unitA.formatDeltaZero() : unitA.formatDeltaRaw(diffA);
         String partB = unitB.isZero(diffB) ? unitB.formatDeltaZero() : unitB.formatDeltaRaw(diffB);
@@ -1171,17 +1299,194 @@ public class Shop {
         boolean positive = (!unitA.isZero(diffA) && diffA > 0) || (!unitB.isZero(diffB) && diffB > 0);
         boolean negative = (!unitA.isZero(diffA) && diffA < 0) || (!unitB.isZero(diffB) && diffB < 0);
         int sign = positive && negative ? 0 : (positive ? 1 : (negative ? -1 : 0));
-        return new StatLine(value, delta, sign);
+        return new StatLine(baseValue, previewValue, delta, sign);
     }
 
     // ====================================================================== //
     //                              NESTED TYPES                               //
     // ====================================================================== //
 
+    private enum PanelStat {
+        MAX_HP(pretty(Stat.MAX_HP)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                return simple(Unit.INT, base.effective().maxHp, preview.effective().maxHp);
+            }
+        },
+        ARMOR(pretty(Stat.ARMOR_PCT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                double baseArmor = armorFromMultiplier(base.effective().incomingDamageMul);
+                double previewArmor = armorFromMultiplier(preview.effective().incomingDamageMul);
+                return simple(Unit.SIGNED_PERCENT, baseArmor, previewArmor);
+            }
+        },
+        DODGE(pretty(Stat.DODGE_PCT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                return simple(Unit.PERCENT, base.effective().dodgePct, preview.effective().dodgePct);
+            }
+        },
+        HP_REGEN(pretty(Stat.HP_REGEN_PS)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                return simple(Unit.FLOAT1, base.effective().hpRegenPerSec, preview.effective().hpRegenPerSec);
+            }
+        },
+        DAMAGE(pretty(Stat.DAMAGE_PCT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                int baseValue = withBase(base, Stat.DAMAGE_PCT, baseStats.baseDamagePct);
+                int previewValue = withBase(preview, Stat.DAMAGE_PCT, baseStats.baseDamagePct);
+                return simple(Unit.SIGNED_PERCENT, baseValue, previewValue);
+            }
+        },
+        MELEE(pretty(Stat.MELEE_PCT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                int baseValue = withBase(base, Stat.MELEE_PCT, 0);
+                int previewValue = withBase(preview, Stat.MELEE_PCT, 0);
+                return simple(Unit.SIGNED_PERCENT, baseValue, previewValue);
+            }
+        },
+        RANGED(pretty(Stat.RANGED_PCT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                int baseValue = withBase(base, Stat.RANGED_PCT, baseStats.baseRangedPct);
+                int previewValue = withBase(preview, Stat.RANGED_PCT, baseStats.baseRangedPct);
+                return simple(Unit.SIGNED_PERCENT, baseValue, previewValue);
+            }
+        },
+        MAGIC(pretty(Stat.MAGIC_PCT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                int baseValue = withBase(base, Stat.MAGIC_PCT, 0);
+                int previewValue = withBase(preview, Stat.MAGIC_PCT, 0);
+                return simple(Unit.SIGNED_PERCENT, baseValue, previewValue);
+            }
+        },
+        CRIT_CHANCE(pretty(Stat.CRIT_CHANCE_PCT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                return simple(Unit.PERCENT, base.effective().critChancePct, preview.effective().critChancePct);
+            }
+        },
+        CRIT_DAMAGE(pretty(Stat.CRIT_DAMAGE_PCT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                double baseMultiplier = base.effective().critMultiplier * 100.0;
+                double previewMultiplier = preview.effective().critMultiplier * 100.0;
+                return simple(Unit.FLOAT1_PERCENT, baseMultiplier, previewMultiplier);
+            }
+        },
+        ATTACK_SPEED("Fire Rate (/s)") {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                return simple(Unit.FLOAT1, base.effective().fireRate, preview.effective().fireRate);
+            }
+        },
+        RANGE("Range (px)") {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                return simple(Unit.INT, base.effective().rangePx, preview.effective().rangePx);
+            }
+        },
+        PROJECTILE("Projectile (spd/size)") {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                double baseSpeed = percentFromMultiplier(base.effective().projectileSpeedMul);
+                double previewSpeed = percentFromMultiplier(preview.effective().projectileSpeedMul);
+                double baseSize = percentFromMultiplier(base.effective().projectileSizeMul);
+                double previewSize = percentFromMultiplier(preview.effective().projectileSizeMul);
+                return combine(Unit.SIGNED_PERCENT, baseSpeed, previewSpeed,
+                        Unit.SIGNED_PERCENT, baseSize, previewSize);
+            }
+        },
+        MULTISHOT(pretty(Stat.MULTISHOT_FLAT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                return simple(Unit.INT, base.effective().multishot, preview.effective().multishot);
+            }
+        },
+        PIERCE(pretty(Stat.PIERCE_FLAT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                return simple(Unit.INT, base.effective().pierce, preview.effective().pierce);
+            }
+        },
+        HOMING("Homing (chance/str)") {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                double baseChance = base.effective().homingChance01 * 100.0;
+                double previewChance = preview.effective().homingChance01 * 100.0;
+                double baseStrength = percentFromMultiplier(base.effective().homingStrengthMul);
+                double previewStrength = percentFromMultiplier(preview.effective().homingStrengthMul);
+                return combine(Unit.PERCENT, baseChance, previewChance,
+                        Unit.SIGNED_PERCENT, baseStrength, previewStrength);
+            }
+        },
+        KNOCKBACK(pretty(Stat.KNOCKBACK_PCT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                int baseValue = withBase(base, Stat.KNOCKBACK_PCT, 0);
+                int previewValue = withBase(preview, Stat.KNOCKBACK_PCT, 0);
+                return simple(Unit.SIGNED_PERCENT, baseValue, previewValue);
+            }
+        },
+        MOVE_SPEED(pretty(Stat.MOVE_SPEED_PCT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                double baseMove = percentFromMultiplier(base.effective().moveSpeedMul);
+                double previewMove = percentFromMultiplier(preview.effective().moveSpeedMul);
+                return simple(Unit.SIGNED_PERCENT, baseMove, previewMove);
+            }
+        },
+        LIFESTEAL(pretty(Stat.LIFESTEAL_PCT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                double baseValue = base.effective().lifestealFrac * 100.0;
+                double previewValue = preview.effective().lifestealFrac * 100.0;
+                return simple(Unit.FLOAT1_PERCENT, baseValue, previewValue);
+            }
+        },
+        LUCK(pretty(Stat.LUCK_FLAT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                return simple(Unit.INT, base.effective().luck, preview.effective().luck);
+            }
+        },
+        HARVESTING(pretty(Stat.HARVESTING_FLAT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                return simple(Unit.INT, base.effective().harvesting, preview.effective().harvesting);
+            }
+        },
+        BOSS_DAMAGE(pretty(Stat.BOSS_DAMAGE_PCT)) {
+            @Override
+            StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats) {
+                double baseValue = percentFromMultiplier(base.effective().bossDamageMul);
+                double previewValue = percentFromMultiplier(preview.effective().bossDamageMul);
+                return simple(Unit.SIGNED_PERCENT, baseValue, previewValue);
+            }
+        };
+
+        private final String label;
+
+        PanelStat(String label) {
+            this.label = label;
+        }
+
+        String label() {
+            return label;
+        }
+
+        abstract StatLine line(StatsSnapshot base, StatsSnapshot preview, EffectiveStats.Base baseStats);
+    }
+
     private record StatsSnapshot(Stats raw, EffectiveStats effective) {}
     private record ModLine(String text, Color color) {}
     private record OfferSlot(int index, Offer offer) {}
-    private record StatLine(String valueText, String deltaText, int deltaSign) {}
+    private record StatLine(String baseText, String previewText, String deltaText, int deltaSign) {}
 
     private static final class CardUI {
         int index;
