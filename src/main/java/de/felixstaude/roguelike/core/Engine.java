@@ -91,6 +91,9 @@ public class Engine implements GameLoop.Handler {
         ensureCanvasSize();
         input.poll();
 
+        // Update arena animations
+        arenaViewport.update(dt);
+
         Point2D.Double mouseWorld = arenaViewport.toWorld(input.mouseX, input.mouseY);
         input.setMouseWorld(mouseWorld.x, mouseWorld.y);
 
