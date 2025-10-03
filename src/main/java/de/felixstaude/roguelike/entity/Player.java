@@ -82,6 +82,8 @@ public class Player {
             b.damage = bulletDamage;
             b.radius = 4;
             b.pierce = Math.max(0, pierce);
+            b.instability = instability; // Pass instability to bullet for visual effects
+
             // Homing Roll
             if (ThreadLocalRandom.current().nextDouble() < homingChance) {
                 b.homing = true;
