@@ -172,6 +172,37 @@ public final class StatRules {
         return 1.0 + (bossDamagePct / 100.0);
     }
 
+    // --- Flux Core System ---------------------------------------------------
+
+    /** Flux Instability wird auf [0%, 100%] gecappt. */
+    public static final int FLUX_INSTABILITY_MIN_PCT = 0;
+    public static final int FLUX_INSTABILITY_MAX_PCT = 100;
+
+    /** Clamped Flux Instability in Prozent [0..100]. */
+    public static int clampFluxInstabilityPct(int instabilityPct) {
+        return Math.max(FLUX_INSTABILITY_MIN_PCT, Math.min(FLUX_INSTABILITY_MAX_PCT, instabilityPct));
+    }
+
+    /**
+     * Berechnet effektive Instability aus Base + Modifiers.
+     * Stability-Flat reduziert Instability (negative Werte).
+     */
+    public static int effectiveFluxInstability(int baseInstability, int instabilityPct, int stabilityFlat) {
+        int total = baseInstability + instabilityPct - stabilityFlat;
+        return clampFluxInstabilityPct(total);
+    }
+
+    /**
+     * Core Overcharge Damage-Multiplier basierend auf Instability.
+     * Base: 1.0 + (overchargePct / 100.0)
+     * Bei hoher Instability verstärkt sich der Effekt.
+     */
+    public static double coreOverchargeMultiplier(int overchargePct, int currentInstabilityPct) {
+        double baseBonus = overchargePct / 100.0;
+        double instabilityFactor = 1.0 + (currentInstabilityPct / 200.0); // +50% bei 100% Instability
+        return 1.0 + (baseBonus * instabilityFactor);
+    }
+
     // --- Utility -------------------------------------------------------------
 
     /** Globaler Damage-Multiplikator aus zwei Prozent-Quellen (z. B. global + typed). Mindestens 1 Schaden. */
