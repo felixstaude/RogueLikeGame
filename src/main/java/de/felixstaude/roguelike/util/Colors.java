@@ -44,6 +44,7 @@ public final class Colors {
     public static final Color RARITY_UNCOMMON  = new Color(0x4CAF50);
     public static final Color RARITY_RARE      = new Color(0x42A5F5);
     public static final Color RARITY_EPIC      = new Color(0xAB47BC);
+    public static final Color RARITY_LEGENDARY = new Color(0xFF6B00); // Flux Core: Orange-Red
 
     // Mod coloring
     public static final Color MOD_POSITIVE = new Color(0x90EE90);
@@ -52,10 +53,11 @@ public final class Colors {
 
     public static Color rarity(ItemRarity rarity) {
         return switch (rarity) {
-            case COMMON   -> RARITY_COMMON;
-            case UNCOMMON -> RARITY_UNCOMMON;
-            case RARE     -> RARITY_RARE;
-            case EPIC     -> RARITY_EPIC;
+            case COMMON    -> RARITY_COMMON;
+            case UNCOMMON  -> RARITY_UNCOMMON;
+            case RARE      -> RARITY_RARE;
+            case EPIC      -> RARITY_EPIC;
+            case LEGENDARY -> RARITY_LEGENDARY;
         };
     }
 }

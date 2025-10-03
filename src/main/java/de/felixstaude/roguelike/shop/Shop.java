@@ -394,9 +394,8 @@ public class Shop {
                 item.applyTo(passiveStats);
                 if (item.unique) boughtUniques.add(item.id);
 
-                // Shop-affine Items
-                if ("u_lucky_charm".equals(item.id)) shopRerollDiscount = 2;
-                if ("bargain_hunter".equals(item.id)) shopPriceDiscountPct = Math.min(50, shopPriceDiscountPct + 15);
+                // Flux Core: Shop-affine Items wurden entfernt (u_lucky_charm, bargain_hunter)
+                // Resonance Amplifier funktioniert über CORE_OVERCHARGE_PCT stat
 
                 yield new PurchaseResult(true, price, "Gekauft: " + item.name);
             }
