@@ -4,7 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a 2D roguelike game built with Java 21 and Swing/Java2D. The game features wave-based combat, weapon combining mechanics, a shop system with stat modifications, and progressive difficulty scaling.
+**Flux Core** - A 2D roguelike game built with Java 21 and Swing/Java2D. The player IS an unstable flux core defending against corrupted energy entities.
+
+### Core Theme
+- **Player**: Unstable flux core with dynamic instability (0-100%)
+- **Enemies**: Corrupted energy cores (purple corruption)
+- **Visuals**: Energy-based with glitch effects, pulsing grids, RGB shifts
+- **Mechanics**: Risk/reward instability system with 5 tiers
+
+The game features wave-based combat, weapon combining mechanics, a shop system with stat modifications, progressive difficulty scaling, and the unique Flux Core Instability system.
 
 ## Build and Development Commands
 
@@ -43,13 +51,42 @@ The game uses a **compositional stat system** with multiple layers:
 
 Key insight: Items and weapons provide `Mod` objects (stat + amount), which are aggregated into `Stats`, then mapped to `EffectiveStats` by applying multiplicative/additive rules defined in `StatRules`.
 
+#### Flux Core Instability System
+**NEW**: The core mechanic of the game (`stats/InstabilityEffects.java`)
+
+5 Instability Tiers (0-100%):
+- **Tier 1 (0-25%)**: Stable - no effects
+- **Tier 2 (26-50%)**: Flux Leak - 10% chance random bullet
+- **Tier 3 (51-75%)**: Core Fracture - 20% bullet split, -15% max HP
+- **Tier 4 (76-99%)**: Critical Mass - +50% damage, 2 HP/s drain
+- **Tier 5 (100%)**: Meltdown - 100 dmg/s aura, 5 HP/s drain
+
+New Stats:
+- `FLUX_INSTABILITY_PCT`: Additive instability (0-100%, clamped)
+- `FLUX_STABILITY_FLAT`: Reduces instability (negative values)
+- `CORE_OVERCHARGE_PCT`: Damage multiplier that scales with instability
+
+Calculation: `effectiveInstability = base + instabilityPct - stabilityFlat` (clamped 0-100)
+
 ### Weapons System (`weapons/`)
+**Flux Core Themed**: All weapons are energy-based
+
+Weapon Types (6 total):
+- `PULSE_CORE` (was PISTOL): Balanced precision
+- `FLUX_STREAM` (was SMG): High fire rate beam
+- `WAVE_BURST` (was SHOTGUN): Multishot with knockback
+- `PHASE_LANCE` (was CROSSBOW): High pierce + damage
+- `SINGULARITY_CANNON` (was RAILGUN): Long range + pull
+- `ENTROPY_FIELD` (was ARC_WAND): Homing + magic
+
 - **WeaponDef**: Blueprint for a weapon type with tier-based mods
 - **WeaponInstance**: Instantiated weapon at a specific tier (COMMON → UNCOMMON → RARE → EPIC)
 - **WeaponHotbar**: 4-slot inventory with **auto-combine** logic
   - Adding a weapon matching existing type+tier combines them into next tier
   - Supports chain-combining (e.g., adding COMMON may trigger multiple combines if duplicates exist)
   - Returns `Result` record indicating success/failure and whether it was added or combined
+
+**All higher-tier weapons add 2-14% FLUX_INSTABILITY_PCT** - power comes at a cost!
 
 ### Shop System (`shop/Shop.java`)
 Complex single-file implementation (~1400 lines) with:
@@ -77,28 +114,69 @@ The shop computes two `StatsSnapshot` objects:
 - Supports lifesteal, crit chance, pierce, homing projectiles
 
 ### Entities (`entity/`)
-- **Player**: Movement, firing, stats (hp, gold, xp, fireRate, multishot, pierce, homing, lifesteal)
-- **Enemy**: Movement toward player, collision
-- **Bullet**: Projectile with optional homing behavior
-- **Particle**: Visual effects
+**Flux Core Visuals**: All entities have energy-themed rendering
+
+- **Player**: Glowing flux core with:
+  - Dynamic color based on instability (Cyan→Magenta→Orange→Red)
+  - 3 rotating energy rings (different speeds)
+  - Pulsating glow (speed increases with instability)
+  - Glitch effects at >75% instability (RGB shift, position jitter)
+  - Field: `instability` (0-100%) set by Engine from EffectiveStats
+
+- **Enemy**: Corrupted purple cores with:
+  - RGB chromatic aberration (30% chance)
+  - Position glitch jitter (±1.5px)
+  - 6 pulsating energy cracks
+  - Flickering outline
+  - HP bar when damaged
+
+- **Bullet**: Energy orbs with:
+  - Color matches player instability
+  - 5-point motion trail with fade
+  - Glow halo effect
+  - Inner bright spot
+  - Homing indicator ring
+
+- **Particle**: Visual effects (muzzle flashes, explosions)
 
 ### Items (`items/`)
+**Flux Core Themed**: 16 items across 5 rarity tiers
+
+Rarity Tiers:
+- **LEGENDARY** (60-80g, NEW): Flux Singularity, Perfect Stabilizer
+- **EPIC** (35-45g): Overcharge Core, Fractal Splitter, Resonance Amplifier
+- **RARE** (20-28g): Entropy Siphon, Phase Shifter, Flux Capacitor
+- **UNCOMMON** (12-16g): Cooling Matrix, Energy Cell, Flux Conduit
+- **COMMON** (8-10g): Stable Core Fragment, Energy Lens, etc.
+
 - **Item**: Passive item with mods and rarity
 - **Mod**: Stat + amount pair
-- **ItemRarity**: COMMON, UNCOMMON, RARE, EPIC (affects UI color/pricing)
+- **ItemRarity**: COMMON, UNCOMMON, RARE, EPIC, LEGENDARY (affects UI color/pricing)
 - **PassiveItemCatalog**: Hardcoded list of passive items
+
+**All high-power items add FLUX_INSTABILITY_PCT** - risk/reward balance is core to gameplay
 
 ### UI (`ui/`)
 - **HUD**: Renders top banner, health/xp bars, debug overlay, game over screen, crosshair
 
 ### Utilities (`util/`)
 - **Draw**: Rendering helpers (panels, buttons, badges, icons, shadows)
-- **Colors**: Centralized color palette
+- **Colors**: Flux Core color palette with helpers
+  - Core colors: `FLUX_STABLE`, `FLUX_UNSTABLE`, `FLUX_CRITICAL`, `CORRUPTION`
+  - Methods: `fluxCoreColor(instability)`, `bulletColor()`, `blend()`, `withAlpha()`
 - **Fonts**: Font management (regular, bold, italic)
 - **ImageCache**: Image loading/caching
 - **Layout**: Layout calculation helpers
 - **Mathx**: Math utilities
 - **Time**: Time formatting
+
+### Arena (`core/EngineArena.java`)
+**Flux Core Environment**: Animated energy grid background
+- Pulsing grid lines (100px spacing, sine-based brightness)
+- 15 orbiting energy sparks (circular pattern)
+- Animated pulsing border
+- Dark BACKDROP for contrast
+- `update(dt)` must be called each frame for animations
 
 ## Important Design Patterns
 
