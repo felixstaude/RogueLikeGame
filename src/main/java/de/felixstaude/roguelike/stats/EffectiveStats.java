@@ -36,17 +36,12 @@ public final class EffectiveStats {
 
     public final double bossDamageMul;     // 1.0 + BossDamage%
 
-    // Flux Core System
-    public final int fluxInstabilityPct;   // 0..100%
-    public final double coreOverchargeMul; // Damage-Multiplier aus Overcharge + Instability
-
     private EffectiveStats(
             int maxHp, double incomingDamageMul, int dodgePct, double hpRegenPerSec,
             double rangedDamageMul, int critChancePct, double critMultiplier,
             double fireRate, int rangePx, double projectileSpeedMul, double projectileSizeMul,
             int multishot, int pierce, double homingChance01, double homingStrengthMul,
-            double moveSpeedMul, double lifestealFrac, int luck, int harvesting, double bossDamageMul,
-            int fluxInstabilityPct, double coreOverchargeMul) {
+            double moveSpeedMul, double lifestealFrac, int luck, int harvesting, double bossDamageMul) {
         this.maxHp = maxHp;
         this.incomingDamageMul = incomingDamageMul;
         this.dodgePct = dodgePct;
@@ -67,8 +62,6 @@ public final class EffectiveStats {
         this.luck = luck;
         this.harvesting = harvesting;
         this.bossDamageMul = bossDamageMul;
-        this.fluxInstabilityPct = fluxInstabilityPct;
-        this.coreOverchargeMul = coreOverchargeMul;
     }
 
     /** Basiswerte des Spielers / der aktuell aktiven Waffe. */
@@ -99,10 +92,6 @@ public final class EffectiveStats {
         public int baseRangePoints = 0;            // zusätzliche Range-Punkte (1P ≈ 6px)
         public int baseRangedPct = 0;              // Basis-Typmultiplikator
         public int baseDamagePct = 0;              // Basis-Globalmultiplikator
-
-        // Flux Core System
-        public int baseFluxInstabilityPct = 0;     // Basis-Instability (Standard 0%)
-        public int baseCoreOverchargePct = 0;      // Basis-Overcharge-Bonus
     }
 
     /** Rechnet alle Regeln/Caps und kombiniert Base + Stats. */
@@ -146,22 +135,12 @@ public final class EffectiveStats {
         int harvesting = StatRules.effectiveHarvesting(b.baseHarvesting + s.get(Stat.HARVESTING_FLAT));
         double bossMul = StatRules.bossDamageMultiplier(s.get(Stat.BOSS_DAMAGE_PCT));
 
-        // Flux Core System
-        int instability = StatRules.effectiveFluxInstability(
-                b.baseFluxInstabilityPct,
-                s.get(Stat.FLUX_INSTABILITY_PCT),
-                s.get(Stat.FLUX_STABILITY_FLAT)
-        );
-        int overchargePct = b.baseCoreOverchargePct + s.get(Stat.CORE_OVERCHARGE_PCT);
-        double overchargeMul = StatRules.coreOverchargeMultiplier(overchargePct, instability);
-
         return new EffectiveStats(
                 maxHp, incomingMul, dodgePct, hpRegen,
                 rangedMul, critChance, critMul,
                 fireRate, rangePx, projSpeedMul, projSizeMul,
                 multishot, pierce, homingChance01, homingStrength,
-                moveMul, lifesteal, luck, harvesting, bossMul,
-                instability, overchargeMul
+                moveMul, lifesteal, luck, harvesting, bossMul
         );
     }
 }
