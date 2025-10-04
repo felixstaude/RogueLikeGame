@@ -41,4 +41,9 @@ public enum Stat {
 
     // Boss/Elites
     BOSS_DAMAGE_PCT,    // Bonus gegen Bosse
+
+    // Flux Core System
+    FLUX_INSTABILITY_PCT,    // 0-100%, beeinflusst Chaos-Effekte und Damage-Multiplier
+    FLUX_STABILITY_FLAT,     // negative Werte reduzieren Instability
+    CORE_OVERCHARGE_PCT,     // zusätzlicher Damage-Multiplier basierend auf Instability
 }
