@@ -99,7 +99,8 @@ public class Shop {
             return switch (rarity) {
                 case COMMON -> ItemRarity.UNCOMMON;
                 case UNCOMMON -> ItemRarity.RARE;
-                case RARE, EPIC -> ItemRarity.EPIC;
+                case RARE -> ItemRarity.EPIC;
+                case EPIC, LEGENDARY -> ItemRarity.LEGENDARY;
             };
         }
     }
@@ -1075,7 +1076,8 @@ public class Shop {
             case ARMOR_PCT, DODGE_PCT, DAMAGE_PCT, MELEE_PCT, RANGED_PCT, MAGIC_PCT,
                     CRIT_CHANCE_PCT, CRIT_DAMAGE_PCT, ATTACK_SPEED_PCT, PROJECTILE_SPEED_PCT,
                     PROJECTILE_SIZE_PCT, HOMING_CHANCE_PCT, HOMING_STRENGTH_PCT, KNOCKBACK_PCT,
-                    MOVE_SPEED_PCT, LIFESTEAL_PCT, BOSS_DAMAGE_PCT -> true;
+                    MOVE_SPEED_PCT, LIFESTEAL_PCT, BOSS_DAMAGE_PCT,
+                    FLUX_INSTABILITY_PCT, CORE_OVERCHARGE_PCT -> true;
             default -> false;
         };
     }
@@ -1106,6 +1108,9 @@ public class Shop {
             case LUCK_FLAT -> "Luck";
             case HARVESTING_FLAT -> "Harvesting";
             case BOSS_DAMAGE_PCT -> "Boss Damage %";
+            case FLUX_INSTABILITY_PCT -> "Flux Instability %";
+            case FLUX_STABILITY_FLAT -> "Flux Stability";
+            case CORE_OVERCHARGE_PCT -> "Core Overcharge %";
         };
     }
 
@@ -1135,6 +1140,9 @@ public class Shop {
             case LUCK_FLAT -> "Luck";
             case HARVESTING_FLAT -> "Harvest";
             case BOSS_DAMAGE_PCT -> "Boss";
+            case FLUX_INSTABILITY_PCT -> "FluxInst";
+            case FLUX_STABILITY_FLAT -> "Stability";
+            case CORE_OVERCHARGE_PCT -> "Overcharge";
         };
     }
 
